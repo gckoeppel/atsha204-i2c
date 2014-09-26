@@ -1,10 +1,14 @@
 /* -*- mode: c; c-file-style: "linux" -*- */
 /*
- * Copyright (c) 2014, Mihai Cristea, REDANS SRL
- * email at: mihai _AT_ redans -DOT- eu
- * GPLv3 License applies
+* I2C Driver for Atmel ATSHA204 over I2C
+*
+* Copyright (C) 2014 Mihai Cristea, REDANS SRL, mihai _AT_ redans -DOT- eu
+* Copyright (C) 2014 Josh Datko, Cryptotronix, jbd@cryptotronix.com
+*
+* This program is free software; you can redistribute  it and/or modify it
+* under the terms of the GNU General Public License version 2 as
+* published by the Free Software Foundation.
  */
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -16,11 +20,7 @@
 #include <linux/kfifo.h>
 #include "hwcrypt.h"
 
-/* Module information */
-MODULE_AUTHOR(AUTHOR);
-MODULE_DESCRIPTION(DESCRIPTION);
-MODULE_VERSION(VERSION);
-MODULE_LICENSE("GPL");
+
 
 /* Device variables */
 static struct class* hwcrypt_class = NULL;
@@ -186,3 +186,8 @@ static void __exit hwcrypt_module_exit(void)
 /* Let the kernel know the calls for module init and exit */
 module_init(hwcrypt_module_init);
 module_exit(hwcrypt_module_exit);
+
+MODULE_AUTHOR("Josh Datko <jbd@cryptotronix.com");
+MODULE_DESCRIPTION("Atmel ATSHA204 driver");
+MODULE_VERSION(VERSION);
+MODULE_LICENSE("GPL");
