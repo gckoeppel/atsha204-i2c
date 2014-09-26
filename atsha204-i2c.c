@@ -18,7 +18,7 @@
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/kfifo.h>
-#include "hwcrypt.h"
+#include "atsha204-i2c.h"
 
 
 

@@ -1,0 +1,12 @@
+/.tmp_versions/
+*.cmd
+*.ko
+
+/Module.symvers
+/atsha204-i2c.mod.c
+/atsha204-i2c.mod.o
+/atsha204-i2c.o
+/hwcrypt.mod.c
+/hwcrypt.mod.o
+/hwcrypt.o
+/modules.order

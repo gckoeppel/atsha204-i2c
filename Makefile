@@ -1,4 +1,4 @@
-obj-m := hwcrypt.o
+obj-m := atsha204-i2c.o
 KDIR ?= /lib/modules/`uname -r`/build
 
 all:
