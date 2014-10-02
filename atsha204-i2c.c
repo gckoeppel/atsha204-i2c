@@ -14,24 +14,65 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
-#include <linux/device.h>
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/kfifo.h>
-#include <linux/i2c.h>
 #include <linux/uaccess.h>
+#include "atsha204-i2c.h"
+#include <linux/crc16.h>
+#include <linux/bitrev.h>
 
 static u8 recv_buf[64];
 
-struct atsha204_chip {
-        struct device *dev;
 
-        int dev_num;
-        char devname[7];
-        unsigned long is_open;
+u16 atsha204_crc16(u8 *buf, u8 len)
+{
+        u8 i;
+        u16 crc16 = 0;
 
-        struct i2c_client *client;
-};
+        for (i = 0; i < len; i++) {
+                u8 shift;
+
+                for (shift = 0x01; shift > 0x00; shift <<= 1) {
+                        u8 data_bit = (buf[i] & shift) ? 1 : 0;
+                        u8 crc_bit = crc16 >> 15;
+
+                        crc16 <<= 1;
+
+                        if ((data_bit ^ crc_bit) != 0)
+                                crc16 ^= 0x8005;
+                }
+        }
+
+        return cpu_to_le16(crc16);
+}
+
+bool atsha204_crc16_matches(const u8 *buf, const u8 len, const u16 crc)
+{
+        u16 crc_calc = atsha204_crc16(buf,len);
+        return (crc == crc_calc) ? true : false;
+}
+
+bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len)
+{
+        u16 *rec_crc = &buf[len - 2];
+        return atsha204_crc16_matches(buf, len - 2, cpu_to_le16(*rec_crc));
+}
+
+void print_crc(u8 *buf, u8 size)
+{
+        printk("%s\n", "CRC START");
+        u16 crc = crc16(0, buf, size);
+        printk("CRC: %d\n", crc);
+
+        crc = crc16(0xFF,buf,size);
+        printk("CRC: %d\n", crc);
+
+        crc = atsha204_crc16(buf, size);
+        printk("CRC: %d\n", crc);
+
+        printk("%s\n", "CRC END");
+}
 
 int atsha204_i2c_wakeup(const struct i2c_client *client)
 {
@@ -42,7 +83,26 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
 
         while (!is_awake){
                 if (4 == i2c_master_send(client, buf, 4)){
+                        printk("%s\n", "OK, we're awake.");
                         is_awake = true;
+
+                        if (4 == i2c_master_recv(client, buf, 4)){
+                                printk("%s", "Received wakeup: ");
+                                printk("%x:", buf[0]);
+                                printk("%x:", buf[1]);
+                                printk("%x:", buf[2]);
+                                printk("%x\n", buf[3]);
+                        }
+
+
+                        u16 *rec_crc = &buf[2];
+
+                        if (atsha204_check_rsp_crc16(buf,4))
+                                retval = 0;
+                        else
+                                printk("%s\n", "CRC failure");
+
+
                 }
                 else{
                         /* is_awake is already false */
@@ -50,6 +110,19 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
         }
 
         retval = 0;
+        return retval;
+
+}
+
+int atsha204_i2c_sleep(const struct i2c_client *client)
+{
+        int retval;
+        char to_send[1] = {ATSHA204_SLEEP};
+
+        if ((retval = i2c_master_send(client,to_send,1)) == 1)
+                retval = 0;
+
+        printk("Device sleep status: %d\n", retval);
         return retval;
 
 }
@@ -89,6 +162,11 @@ out:
 
 }
 
+static int atsha204_i2c_open(struct inode *inode, struct file *filep)
+{
+
+}
+
 ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
                           loff_t *f_pos)
 {
@@ -106,34 +184,78 @@ ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
         return size_data;
 }
 
+
+
+struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev)
+{
+        struct atsha204_chip *chip;
+
+        if ((chip = kzalloc(sizeof(*chip), GFP_KERNEL)) == NULL)
+                goto out_null;
+
+        chip->dev_num = 0;
+        scnprintf(chip->devname, sizeof(chip->devname), "%s%d",
+                  "atsha", chip->dev_num);
+
+        chip->dev = get_device(dev);
+        dev_set_drvdata(dev, chip);
+
+        if (atsha204_i2c_add_device(chip))
+                goto put_device;
+
+        return chip;
+
+put_device:
+        put_device(chip->dev);
+out_free:
+        kfree(chip);
+out_null:
+        return NULL;
+}
+
+static int atsha204_i2c_release(struct inode *inode, struct file *filep)
+{
+
+}
+void atsha204_i2c_del_device(struct atsha204_chip *chip)
+{
+        if (chip->miscdev.name)
+                misc_deregister(&chip->miscdev);
+}
+
 static int atsha204_i2c_probe(struct i2c_client *client,
                               const struct i2c_device_id *id)
 {
         int result = -1;
+        struct atsha204_chip *chip;
+        struct device *dev = &client->dev;
+
+        if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
+                return -ENODEV;
+
         if(0 == atsha204_i2c_wakeup(client)){
                 printk("%s", "Device is awake\n");
+                atsha204_i2c_sleep(client);
+
                 result = 0;
         }
         else{
                 printk("%s", "Device failed to wake\n");
         }
 
-        return result;
+        return 0;
 }
 
 static int atsha204_i2c_remove(struct i2c_client *client)
 
 {
-        printk("%s", "Remove called");
+        printk("%s\n", "Remove called");
         return 0;
 }
 
 
 
-static const struct i2c_device_id atsha204_i2c_id[] = {
-        {"atsha204-i2c", 0},
-        { }
-};
+
 
 MODULE_DEVICE_TABLE(i2c, atsha204_i2c_id);
 
@@ -169,6 +291,29 @@ static const struct file_operations atsha204_i2c_fops = {
         .release = atsha204_i2c_release,
 };
 
+
+int atsha204_i2c_add_device(struct atsha204_chip *chip)
+{
+        int retval;
+
+        chip->miscdev.fops = &atsha204_i2c_fops;
+        chip->miscdev.minor = MISC_DYNAMIC_MINOR;
+
+        chip->miscdev.name = chip->devname;
+        chip->miscdev.parent = chip->dev;
+
+        if ((retval = misc_register(&chip->miscdev)) != 0){
+                chip->miscdev.name = NULL;
+                dev_err(chip->dev,
+                        "unable to misc_register %s, minor %d err=%d\n",
+                        chip->miscdev.name,
+                        chip->miscdev.minor,
+                        retval);
+        }
+
+
+        return retval;
+}
 
 MODULE_AUTHOR("Josh Datko <jbd@cryptotronix.com");
 MODULE_DESCRIPTION("Atmel ATSHA204 driver");
