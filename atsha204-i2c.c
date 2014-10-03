@@ -21,11 +21,109 @@
 #include "atsha204-i2c.h"
 #include <linux/crc16.h>
 #include <linux/bitrev.h>
+#include <linux/delay.h>
 
-static u8 recv_buf[64];
+void
+atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
+{
 
+        int i;
 
-u16 atsha204_crc16(u8 *buf, u8 len)
+        printk("%s : ", str);
+
+        for (i = 0; i < len; i++)
+        {
+                if (i > 0) printk(" ");
+                printk("0x%02X", hex[i]);
+        }
+
+        printk("\n");
+
+}
+
+void atsha204_i2c_set_cmd_parameters(struct atsha204_cmd_metadata *cmd,
+                                     u8 opcode)
+{
+        switch (opcode) {
+        case 0x1b:
+                printk("%s/n", "RANDOM Command");
+                atsha204_set_params(cmd, 32, 50);
+                break;
+        default:
+                atsha204_set_params(cmd, 0, 0);
+
+        }
+}
+int atsha204_i2c_transmit(const struct i2c_client *client,
+                          const char __user *buf, size_t len)
+{
+        int rc;
+        char *to_send;
+        u16 crc;
+        int len_crc = len + 2;
+        u16 *crc_in_buf;
+
+        /* Add room for the CRC16 */
+        to_send = kmalloc(len_crc, GFP_KERNEL);
+        if (!to_send){
+                rc = -ENOMEM;
+                goto out;
+        }
+
+        printk("%s\n", "Created new buffer");
+
+        if (copy_from_user(to_send, buf, len)){
+                rc = -EFAULT;
+                goto free_out;
+        }
+
+        printk("%s\n", "Copied data new buffer");
+
+        /* The opcode byte is not included in the crc */
+        crc = atsha204_crc16(&to_send[1], len - 1);
+
+        printk("%s: %d\n", "CRC", crc);
+
+        crc_in_buf = (u16*)&to_send[len];
+        *crc_in_buf = crc;
+
+        atsha204_print_hex_string("About to send", to_send, len_crc);
+
+        /* Begin i2c transactions */
+        if ((rc = atsha204_i2c_wakeup(client)))
+                goto free_out;
+
+        if ((rc = i2c_master_send(client, to_send, len_crc)) != len_crc)
+                goto free_out;
+
+        //i2c_master_recv(chip->client, recv_buf, sizeof(recv_buf));
+
+free_out:
+        kfree(to_send);
+
+out:
+        return rc;
+
+}
+
+int atsha204_i2c_receive(const struct i2c_client *client,
+                         u8 *kbuf, const int len)
+{
+        u16 *crc_in_buf;
+        u16 crc;
+        int rc;
+
+        if ((rc = i2c_master_recv(client, kbuf, len)) == len){
+                crc_in_buf = &kbuf[len - 2];
+                crc = atsha204_crc16(kbuf, len - 2);
+                if (!atsha204_check_rsp_crc16(kbuf, len))
+                        rc = -EBADMSG;
+        }
+
+        return rc;
+}
+
+u16 atsha204_crc16(const u8 *buf, const u8 len)
 {
         u8 i;
         u16 crc16 = 0;
@@ -59,21 +157,6 @@ bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len)
         return atsha204_crc16_matches(buf, len - 2, cpu_to_le16(*rec_crc));
 }
 
-void print_crc(u8 *buf, u8 size)
-{
-        printk("%s\n", "CRC START");
-        u16 crc = crc16(0, buf, size);
-        printk("CRC: %d\n", crc);
-
-        crc = crc16(0xFF,buf,size);
-        printk("CRC: %d\n", crc);
-
-        crc = atsha204_crc16(buf, size);
-        printk("CRC: %d\n", crc);
-
-        printk("%s\n", "CRC END");
-}
-
 int atsha204_i2c_wakeup(const struct i2c_client *client)
 {
         bool is_awake = false;
@@ -94,8 +177,6 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
                                 printk("%x\n", buf[3]);
                         }
 
-
-                        u16 *rec_crc = &buf[2];
 
                         if (atsha204_check_rsp_crc16(buf,4))
                                 retval = 0;
@@ -130,64 +211,74 @@ int atsha204_i2c_sleep(const struct i2c_client *client)
 ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
                            size_t count, loff_t *f_pos)
 {
-        char *to_send;
+        struct atsha204_file_priv *priv = filep->private_data;
+        struct atsha204_chip *chip = priv->chip;
+        int rc = atsha204_i2c_transmit(chip->client, buf, count);
+        int packet_len = priv->meta.expected_rec_len + 3;
+        int recv_status;
 
-        struct atsha204_chip *chip = filep->private_data;
+        msleep(priv->meta.usleep);
 
-        ssize_t retval = -ENOMEM;
+        recv_status = atsha204_i2c_receive(chip->client,
+                                           priv->recv_data, packet_len);
 
-        to_send = kmalloc(count, GFP_KERNEL);
-        if (!to_send)
-                goto out;
-
-        if (copy_from_user(to_send, buf, count)){
-                retval = -EFAULT;
-                goto out;
+        if (recv_status != packet_len){
+                rc = recv_status;
+        }
+        else{
+                priv->meta.actual_rec_len = packet_len;
         }
 
-        if ((retval = atsha204_i2c_wakeup(chip->client)) != 0)
-                goto free;
-
-        if ((retval = i2c_master_send(chip->client, to_send, count)) != count){
-                goto free;
-        }
-
-        i2c_master_recv(chip->client, recv_buf, sizeof(recv_buf));
-
-free:
-        kfree(to_send);
-out:
-        return retval;
-
-
-}
-
-static int atsha204_i2c_open(struct inode *inode, struct file *filep)
-{
-
+        return rc;
 }
 
 ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
                           loff_t *f_pos)
 {
-        int retval = 0;
+        struct atsha204_file_priv *priv = filep->private_data;
 
-        int size_data = (count > sizeof(recv_buf)) ? sizeof(recv_buf) : count;
+        int rc;
+        const int packet_len = priv->meta.actual_rec_len;
 
-        if (copy_to_user(buf, recv_buf, size_data)){
-                retval = -EFAULT;
+        int size_data = (count > packet_len) ? packet_len : count;
+
+        if (copy_to_user(buf, &priv->recv_data[1], size_data)){
+                rc = -EFAULT;
         }
         else{
-                retval = size_data;
+                rc = size_data;
         }
 
-        return size_data;
+        return rc;
+}
+
+
+static int atsha204_i2c_open(struct inode *inode, struct file *filep)
+{
+        struct miscdevice *misc = filep->private_data;
+        struct atsha204_chip *chip = container_of(misc, struct atsha204_chip,
+                                                  miscdev);
+
+        struct atsha204_file_priv *priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+        if (NULL == priv)
+                return -ENOMEM;
+
+        priv->chip = chip;
+
+        filep->private_data = priv;
+
+        return 0;
+
 }
 
 
 
-struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev)
+
+
+struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
+                                                     struct i2c_client *client)
 {
+        printk("%s\n", "In register hardware");
         struct atsha204_chip *chip;
 
         if ((chip = kzalloc(sizeof(*chip), GFP_KERNEL)) == NULL)
@@ -200,6 +291,8 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev)
         chip->dev = get_device(dev);
         dev_set_drvdata(dev, chip);
 
+        chip->client = client;
+
         if (atsha204_i2c_add_device(chip))
                 goto put_device;
 
@@ -207,7 +300,7 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev)
 
 put_device:
         put_device(chip->dev);
-out_free:
+
         kfree(chip);
 out_null:
         return NULL;
@@ -215,7 +308,7 @@ out_null:
 
 static int atsha204_i2c_release(struct inode *inode, struct file *filep)
 {
-
+        return 0;
 }
 void atsha204_i2c_del_device(struct atsha204_chip *chip)
 {
@@ -227,23 +320,23 @@ static int atsha204_i2c_probe(struct i2c_client *client,
                               const struct i2c_device_id *id)
 {
         int result = -1;
-        struct atsha204_chip *chip;
         struct device *dev = &client->dev;
 
         if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
                 return -ENODEV;
 
-        if(0 == atsha204_i2c_wakeup(client)){
+        if((result = atsha204_i2c_wakeup(client)) == 0){
                 printk("%s", "Device is awake\n");
                 atsha204_i2c_sleep(client);
 
-                result = 0;
+                atsha204_i2c_register_hardware(dev, client);
+
         }
         else{
                 printk("%s", "Device failed to wake\n");
         }
 
-        return 0;
+        return result;
 }
 
 static int atsha204_i2c_remove(struct i2c_client *client)
@@ -296,6 +389,7 @@ int atsha204_i2c_add_device(struct atsha204_chip *chip)
 {
         int retval;
 
+        printk("%s\n", "In add device");
         chip->miscdev.fops = &atsha204_i2c_fops;
         chip->miscdev.minor = MISC_DYNAMIC_MINOR;
 
