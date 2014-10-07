@@ -13,8 +13,10 @@
 #include <linux/miscdevice.h>
 #include <linux/i2c.h>
 #include <linux/device.h>
+#include <linux/hw_random.h>
 
 #define ATSHA204_SLEEP 0x01
+#define ATSHA204_RNG_NAME "atsha-rng"
 
 struct atsha204_chip {
     struct device *dev;
@@ -75,7 +77,10 @@ int atsha204_i2c_wakeup(const struct i2c_client *client);
 int atsha204_i2c_idle(const struct i2c_client *client);
 int atsha204_i2c_transmit(const struct i2c_client *client,
                           const char __user *buf, size_t len);
-
+int atsha204_i2c_transaction(const struct i2c_client *client,
+                             const u8* to_send, size_t to_send_len,
+                             struct atsha204_buffer *buf);
+int atsha204_i2c_get_random(u8 *to_fill, const size_t max);
 
 void atsha204_set_params(struct atsha204_cmd_metadata *cmd,
                          int expected_rec_len,
@@ -84,3 +89,14 @@ void atsha204_set_params(struct atsha204_cmd_metadata *cmd,
     cmd->expected_rec_len = expected_rec_len;
     cmd->usleep = usleep;
 }
+
+static int atsha204_i2c_rng_read(struct hwrng *rng, void *data,
+                                 size_t max, bool wait)
+{
+    return atsha204_i2c_get_random(data, max);
+}
+
+static struct hwrng atsha204_i2c_rng = {
+    .name = ATSHA204_RNG_NAME,
+    .read = atsha204_i2c_rng_read,
+};

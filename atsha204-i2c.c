@@ -23,6 +23,8 @@
 #include <linux/bitrev.h>
 #include <linux/delay.h>
 
+struct i2c_client *client_for_rand = NULL;
+
 void
 atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
 {
@@ -55,19 +57,34 @@ void atsha204_i2c_set_cmd_parameters(struct atsha204_cmd_metadata *cmd,
         }
 }
 
-int atsha204_i2c_get_random(const struct i2c_client *client,
-                            u8 *to_fill, int bytes)
+int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 {
         int rc;
-        u8 *rand;
-
-        to_fill = kmalloc(bytes, GFP_KERNEL);
-        if (!to_fill)
-                return -ENOMEM;
+        struct atsha204_buffer recv = {0,0};
+        int rnd_len;
+        const struct i2c_client *client = client_for_rand;
 
         const u8 rand_cmd[] = {0x03, 0x07, 0x1b, 0x01, 0x00, 0x00, 0x27, 0x47};
 
-        return -1;
+        printk("In get random\n");
+
+        rc = atsha204_i2c_transaction(client, rand_cmd, sizeof(rand_cmd),
+                                      &recv);
+        if (sizeof(rand_cmd) == rc){
+
+                if (!atsha204_check_rsp_crc16(recv.ptr, recv.len))
+                        rc = -EBADMSG;
+                else{
+                        rnd_len = (max > recv.len - 3) ? recv.len - 3 : max;
+                        memcpy(to_fill, &recv.ptr[1], rnd_len);
+                        rc = rnd_len;
+                }
+
+        }
+
+        printk("%s %d:%d\n", "Returning random data", rc, max);
+
+        return rc;
 
 
 }
@@ -118,57 +135,6 @@ out:
 
 }
 
-int atsha204_i2c_transmit(const struct i2c_client *client,
-                          const char __user *buf, size_t len)
-{
-        int rc;
-        char *to_send;
-        u16 crc;
-        int len_crc = len + 2;
-        u16 *crc_in_buf;
-
-        /* Add room for the CRC16 */
-        to_send = kmalloc(len_crc, GFP_KERNEL);
-        if (!to_send){
-                rc = -ENOMEM;
-                goto out;
-        }
-
-        printk("%s\n", "Created new buffer");
-
-        if (copy_from_user(to_send, buf, len)){
-                rc = -EFAULT;
-                goto free_out;
-        }
-
-        printk("%s\n", "Copied data new buffer");
-
-        /* The opcode byte is not included in the crc */
-        crc = atsha204_crc16(&to_send[1], len - 1);
-
-        printk("%s: %d\n", "CRC", crc);
-
-        crc_in_buf = (u16*)&to_send[len];
-        *crc_in_buf = crc;
-
-        atsha204_print_hex_string("About to send", to_send, len_crc);
-
-        /* Begin i2c transactions */
-        if ((rc = atsha204_i2c_wakeup(client)))
-                goto free_out;
-
-        if ((rc = i2c_master_send(client, to_send, len_crc)) != len_crc)
-                goto free_out;
-
-        //i2c_master_recv(chip->client, recv_buf, sizeof(recv_buf));
-
-free_out:
-        kfree(to_send);
-
-out:
-        return rc;
-
-}
 
 int atsha204_i2c_receive(const struct i2c_client *client,
                          u8 *kbuf, const int len)
@@ -292,6 +258,8 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
         u8 *to_send;
         int rc;
 
+        printk("In write\n");
+
         to_send = kmalloc(count, GFP_KERNEL);
         if (!to_send)
                 return -ENOMEM;
@@ -380,6 +348,11 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
 
         if (atsha204_i2c_add_device(chip))
                 goto put_device;
+        else{
+                int rc = hwrng_register(&atsha204_i2c_rng);
+                printk("%s%d\n", "HWRNG result: ");
+        }
+
 
         return chip;
 
@@ -405,8 +378,12 @@ static int atsha204_i2c_probe(struct i2c_client *client,
                 printk("%s", "Device is awake\n");
                 atsha204_i2c_sleep(client);
 
-                if (NULL == atsha204_i2c_register_hardware(dev, client))
+                client_for_rand = client;
+
+                if (NULL == atsha204_i2c_register_hardware(dev, client)){
+                        client_for_rand = NULL;
                         return -ENODEV;
+                }
 
         }
         else{
@@ -427,7 +404,11 @@ static int atsha204_i2c_remove(struct i2c_client *client)
         if (chip)
                 misc_deregister(&chip->miscdev);
 
+        hwrng_unregister(&atsha204_i2c_rng);
+
         kfree(chip);
+
+        client_for_rand = NULL;
 
         /* The device is in an idle state, where it keeps ephemeral
          * memory. Wakeup the device and sleep it, which will cause it
