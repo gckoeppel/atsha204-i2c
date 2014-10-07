@@ -99,7 +99,9 @@ int atsha204_i2c_transaction(const struct i2c_client *client,
         }
 
         packet_len = status_packet[0];
-        recv_buf = kmalloc(packet_len, GFP_KERNEL);
+        /* The device is awake and we don't want to hit the watchdog
+           timer, so don't allow sleeps here*/
+        recv_buf = kmalloc(packet_len, GFP_ATOMIC);
         memcpy(recv_buf, status_packet, sizeof(status_packet));
         rc = i2c_master_recv(client, recv_buf + 4, packet_len - 4);
 
