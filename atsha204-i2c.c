@@ -426,6 +426,14 @@ static int atsha204_i2c_remove(struct i2c_client *client)
                 misc_deregister(&chip->miscdev);
 
         kfree(chip);
+
+        /* The device is in an idle state, where it keeps ephemeral
+         * memory. Wakeup the device and sleep it, which will cause it
+         * to clear its internal memory */
+
+        atsha204_i2c_wakeup(client);
+        atsha204_i2c_sleep(client);
+
         return 0;
 
 }
