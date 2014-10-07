@@ -15,7 +15,6 @@
 #include <linux/device.h>
 
 #define ATSHA204_SLEEP 0x01
-#define ATSHA204_MAX_RECV_SIZE 128
 
 struct atsha204_chip {
     struct device *dev;
@@ -36,11 +35,16 @@ struct atsha204_cmd_metadata {
     unsigned long usleep;
 };
 
+struct atsha204_buffer {
+    u8 *ptr;
+    int len;
+};
+
 struct atsha204_file_priv {
     struct atsha204_chip *chip;
     struct atsha204_cmd_metadata meta;
 
-    u8 recv_data[ATSHA204_MAX_RECV_SIZE];
+    struct atsha204_buffer buf;
 };
 
 static const struct i2c_device_id atsha204_i2c_id[] = {
@@ -68,6 +72,7 @@ bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
 
 /* atsha204 specific functions */
 int atsha204_i2c_wakeup(const struct i2c_client *client);
+int atsha204_i2c_idle(const struct i2c_client *client);
 int atsha204_i2c_transmit(const struct i2c_client *client,
                           const char __user *buf, size_t len);
 
