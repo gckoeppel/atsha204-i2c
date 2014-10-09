@@ -74,6 +74,8 @@ int atsha204_i2c_open(struct inode *inode, struct file *filep);
 /* atsha204 crc functions */
 u16 atsha204_crc16(const u8 *buf, const u8 len);
 bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
+int atsha204_i2c_validate_rsp(const struct atsha204_buffer *packet,
+                                  struct atsha204_buffer *rsp);
 
 /* sysfs functions */
 int atsha204_sysfs_add_device(struct atsha204_chip *chip);

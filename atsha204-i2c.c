@@ -124,6 +124,8 @@ int atsha204_i2c_transaction(const struct i2c_client *client,
 
         atsha204_i2c_idle(client);
 
+        /* Store the entire packet. Other functions must check the CRC
+           and strip of the length byte */
         buf->ptr = recv_buf;
         buf->len = packet_len;
 
@@ -185,6 +187,28 @@ bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len)
 {
         u16 *rec_crc = &buf[len - 2];
         return atsha204_crc16_matches(buf, len - 2, cpu_to_le16(*rec_crc));
+}
+
+int atsha204_i2c_validate_rsp(const struct atsha204_buffer *packet,
+                              struct atsha204_buffer *rsp)
+{
+        int rc;
+
+        if (packet->len < 4)
+                goto out_bad_msg;
+        else if (atsha204_check_rsp_crc16(packet->ptr, packet->len)){
+                rsp->ptr = packet->ptr + 1;
+                rsp->len = packet->len - 3;
+                rc = 0;
+                goto out;
+        }
+        else
+                /* CRC failed */
+
+out_bad_msg:
+        rc = -EBADMSG;
+out:
+        return rc;
 }
 
 int atsha204_i2c_wakeup(const struct i2c_client *client)
@@ -495,27 +519,35 @@ int atsha204_i2c_read4(const struct i2c_client *client, u8 *read_buf,
 {
         u8 read_cmd[8] = {0};
         u16 crc;
-        struct atsha204_buffer rsp;
-        int rc;
+        struct atsha204_buffer rsp, msg;
+        int rc, validate_status;
 
         read_cmd[0] = 0x03; /* Command byte */
         read_cmd[1] = 0x07; /* length */
         read_cmd[2] = 0x02; /* Read command opcode */
         read_cmd[3] = param1;
-        read_cmd[4] = cpu_to_le16(addr) >> 8;
-        read_cmd[5] = cpu_to_le16(addr) & 0xFF;
+        read_cmd[4] = cpu_to_le16(addr) & 0xFF;
+        read_cmd[5] = cpu_to_le16(addr) >> 8;
 
         crc = atsha204_crc16(&read_cmd[1], 5);
 
-        read_cmd[6] = cpu_to_le16(crc) >> 8;
-        read_cmd[7] = cpu_to_le16(crc) & 0xFF;
+
+        read_cmd[6] = cpu_to_le16(crc) & 0xFF;
+        read_cmd[7] = cpu_to_le16(crc) >> 8;
 
         rc = atsha204_i2c_transaction(client, read_cmd, sizeof(read_cmd), &rsp);
 
-        if (4 == rc){
-                atsha204_print_hex_string("Read 4 bytes", rsp.ptr, rsp.len);
-                memcpy(read_buf, rsp.ptr, rsp.len);
-                kfree(rsp.ptr);
+        if (sizeof(read_cmd) == rc){
+                if ((validate_status = atsha204_i2c_validate_rsp(&rsp, &msg))
+                    == 0){
+                        atsha204_print_hex_string("Read 4 bytes", msg.ptr, msg.len);
+                        memcpy(read_buf, msg.ptr, msg.len);
+                        kfree(rsp.ptr);
+                        rc = msg.len;
+                }
+                else
+                        rc = validate_status;
+
         }
 
         return rc;
@@ -531,7 +563,7 @@ static ssize_t configzone_show(struct device *dev,
 {
         struct atsha204_chip *chip = dev_get_drvdata(dev);
         int rc, i;
-        u16 bytes;
+        u16 bytes, word_addr;
         bool keep_going = true;
         u8 param1 = 0; /* indicates configzone region */
         char *str = buf;
@@ -539,15 +571,17 @@ static ssize_t configzone_show(struct device *dev,
         u8 configzone[128] = {0};
 
         for (bytes = 0; bytes < sizeof(configzone) && keep_going; bytes += 4){
+                word_addr = bytes / 4;
                 if (4 != atsha204_i2c_read4(chip->client,
-                                            &configzone[bytes], bytes, param1)){
+                                            &configzone[bytes],
+                                            word_addr, param1)){
                         keep_going = false;
                 }
         }
 
         for (i = 0; i < bytes; i++) {
                 str += sprintf(str, "%02X ", configzone[i]);
-                if ((i + 1) % 16 == 0)
+                if ((i + 1) % 4 == 0)
                         str += sprintf(str, "\n");
         }
 
@@ -556,9 +590,43 @@ static ssize_t configzone_show(struct device *dev,
 /*static DEVICE_ATTR_RO(configzone);*/
 struct device_attribute dev_attr_configzone = __ATTR_RO(configzone);
 
+static ssize_t serialnum_show(struct device *dev,
+                              struct device_attribute *attr,
+                              char *buf)
+{
+        struct atsha204_chip *chip = dev_get_drvdata(dev);
+        int i;
+        u16 bytes, word_addr;
+        bool keep_going = true;
+        u8 param1 = 0; /* indicates configzone region */
+        char *str = buf;
+
+        u8 serial[12] = {0};
+
+        for (bytes = 0; bytes < sizeof(serial) && keep_going; bytes += 4){
+                word_addr = bytes / 4;
+                if (4 != atsha204_i2c_read4(chip->client,
+                                            &serial[bytes],
+                                            word_addr, param1)){
+                        keep_going = false;
+                }
+        }
+
+        for (i = 0; i < bytes; i++) {
+                str += sprintf(str, "%02X", serial[i]);
+                if ((i + 1) % sizeof(serial) == 0)
+                        str += sprintf(str, "\n");
+        }
+
+        return str - buf;
+}
+/*static DEVICE_ATTR_RO(configzone);*/
+struct device_attribute dev_attr_serialnum = __ATTR_RO(serialnum);
+
 
 static struct attribute *atsha204_dev_attrs[] = {
         &dev_attr_configzone.attr,
+        &dev_attr_serialnum.attr,
         NULL,
 };
 
