@@ -9,6 +9,8 @@
  * under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+#ifndef _ATSHA204_I2C_H_
+#define _ATSHA204_I2C_H_
 
 #include <linux/miscdevice.h>
 #include <linux/i2c.h>
@@ -56,21 +58,26 @@ static const struct i2c_device_id atsha204_i2c_id[] = {
 
 
 /* I2C detection */
-static int atsha204_i2c_probe(struct i2c_client *client,
-                              const struct i2c_device_id *id);
-static int atsha204_i2c_remove(struct i2c_client *client);
+int atsha204_i2c_probe(struct i2c_client *client,
+                           const struct i2c_device_id *id);
+
+int atsha204_i2c_remove(struct i2c_client *client);
 
 /* Device registration */
 struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
                                                      struct i2c_client *client);
 int atsha204_i2c_add_device(struct atsha204_chip *chip);
 void atsha204_i2c_del_device(struct atsha204_chip *chip);
-static int atsha204_i2c_release(struct inode *inode, struct file *filep);
-static int atsha204_i2c_open(struct inode *inode, struct file *filep);
+int atsha204_i2c_release(struct inode *inode, struct file *filep);
+int atsha204_i2c_open(struct inode *inode, struct file *filep);
 
 /* atsha204 crc functions */
 u16 atsha204_crc16(const u8 *buf, const u8 len);
 bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
+
+/* sysfs functions */
+int atsha204_sysfs_add_device(struct atsha204_chip *chip);
+void atsha204_sysfs_del_device(struct atsha204_chip *chip);
 
 /* atsha204 specific functions */
 int atsha204_i2c_wakeup(const struct i2c_client *client);
@@ -100,3 +107,9 @@ static struct hwrng atsha204_i2c_rng = {
     .name = ATSHA204_RNG_NAME,
     .read = atsha204_i2c_rng_read,
 };
+
+
+/* Debug */
+void atsha204_print_hex_string(const char *str, const u8 *hex, const int len);
+
+#endif /* _ATSHA204_I2C_H_ */
