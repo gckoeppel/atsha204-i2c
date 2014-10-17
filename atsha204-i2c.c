@@ -700,10 +700,61 @@ static ssize_t serialnum_show(struct device *dev,
 /*static DEVICE_ATTR_RO(configzone);*/
 struct device_attribute dev_attr_serialnum = __ATTR_RO(serialnum);
 
+static ssize_t is_locked(struct device *dev,
+                         struct device_attribute *attr,
+                         char *buf,
+                         const int offset)
+{
+        struct atsha204_chip *chip = dev_get_drvdata(dev);
+        const u16 LOCK_ADDR = 0x15;
+        u8 param1 = 0; /* indicates configzone region */
+        char *str = buf;
+        u8 lock_buf[4];
+        const u8 UNLOCKED = 0x55;
+
+        if (sizeof(lock_buf) == atsha204_i2c_read4(chip->client,
+                                                   lock_buf,
+                                                   LOCK_ADDR, param1)){
+
+                atsha204_print_hex_string("Lock data", lock_buf, 4);
+
+                if (UNLOCKED == lock_buf[offset])
+                        str += sprintf(str, "0");
+                else
+                        str += sprintf(str, "1");
+
+                str += sprintf(str, "\n");
+
+        }
+
+        return str - buf;
+}
+
+static ssize_t configlocked_show(struct device *dev,
+                                 struct device_attribute *attr,
+                                 char *buf)
+{
+        const int CONFIG_ZONE_LOCK_OFFSET = 3;
+
+        return is_locked(dev, attr, buf, CONFIG_ZONE_LOCK_OFFSET);
+}
+struct device_attribute dev_attr_configlocked = __ATTR_RO(configlocked);
+
+static ssize_t datalocked_show(struct device *dev,
+                               struct device_attribute *attr,
+                               char *buf)
+{
+        const int DATA_ZONE_LOCK_OFFSET = 2;
+
+        return is_locked(dev, attr, buf, DATA_ZONE_LOCK_OFFSET);
+}
+struct device_attribute dev_attr_datalocked = __ATTR_RO(datalocked);
 
 static struct attribute *atsha204_dev_attrs[] = {
         &dev_attr_configzone.attr,
         &dev_attr_serialnum.attr,
+        &dev_attr_configlocked.attr,
+        &dev_attr_datalocked.attr,
         NULL,
 };
 
