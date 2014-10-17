@@ -702,5 +702,5 @@ void atsha204_sysfs_del_device(struct atsha204_chip *chip)
 
 MODULE_AUTHOR("Josh Datko <jbd@cryptotronix.com");
 MODULE_DESCRIPTION("Atmel ATSHA204 driver");
-//MODULE_VERSION(VERSION);
+MODULE_VERSION(ATSHA204_I2C_VERSION);
 MODULE_LICENSE("GPL");

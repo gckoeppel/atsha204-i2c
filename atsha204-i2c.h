@@ -17,6 +17,7 @@
 #include <linux/device.h>
 #include <linux/hw_random.h>
 
+#define ATSHA204_I2C_VERSION "0.1"
 #define ATSHA204_SLEEP 0x01
 #define ATSHA204_RNG_NAME "atsha-rng"
 
