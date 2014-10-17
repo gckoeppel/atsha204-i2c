@@ -15,7 +15,9 @@ int main()
 
     int file;
     char *filename = "/dev/atsha0";
-    static char buf[] = {0x03, 0x07, 0x1B, 0x01, 0x00, 0x00, 0x27, 0x47};
+    //static char buf[] = {0x03, 0x07, 0x1B, 0x01, 0x00, 0x00, 0x27,
+    //0x47};
+    static char buf[] = {0x1B, 0x01, 0x00, 0x00};
     static char recv_buf[32];
 
 
@@ -29,10 +31,16 @@ int main()
         perror("Write failed\n");
         exit(1);
     }
+    else{
+        printf("Wrote %d bytes\n", sizeof(buf));
+    }
 
     if (sizeof(recv_buf) != read(file,buf,sizeof(recv_buf))){
         perror("Read failed\n");
         exit(1);
+    }
+    else{
+        printf("Read %d bytes\n", sizeof(recv_buf));
     }
 
     close(file);

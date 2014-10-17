@@ -76,6 +76,7 @@ u16 atsha204_crc16(const u8 *buf, const u8 len);
 bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
 int atsha204_i2c_validate_rsp(const struct atsha204_buffer *packet,
                                   struct atsha204_buffer *rsp);
+void atsha204_i2c_crc_command(u8 *cmd, int len);
 
 /* sysfs functions */
 int atsha204_sysfs_add_device(struct atsha204_chip *chip);
@@ -110,6 +111,8 @@ static struct hwrng atsha204_i2c_rng = {
     .read = atsha204_i2c_rng_read,
 };
 
+/* Validation functions */
+int validate_write_size(const size_t count);
 
 /* Debug */
 void atsha204_print_hex_string(const char *str, const u8 *hex, const int len);

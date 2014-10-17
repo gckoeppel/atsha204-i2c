@@ -274,6 +274,35 @@ int atsha204_i2c_sleep(const struct i2c_client *client)
 
 }
 
+void atsha204_i2c_crc_command(u8 *cmd, int len)
+{
+        /* The command packet is:
+        [0x03] [Length=1 + command + CRC] [cmd] [crc]
+
+        The CRC is calculated over:
+        CRC([Len] [cmd]) */
+        int crc_data_len = len - 2 - 1;
+        u16 crc = atsha204_crc16(&cmd[1], crc_data_len);
+
+
+        cmd[len - 2] = cpu_to_le16(crc) & 0xFF;
+        cmd[len - 1] = cpu_to_le16(crc) >> 8;
+}
+
+int validate_write_size(const size_t count)
+{
+        const int MIN_SIZE = 4;
+        /* Header and CRC occupy 4 bytes and the length is a one byte
+           value */
+        const int MAX_SIZE = 255 - 4;
+        int rc = -EMSGSIZE;
+
+        if (count <= MAX_SIZE && count >= MIN_SIZE)
+                rc = 0;
+
+        return rc;
+
+}
 ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
                            size_t count, loff_t *f_pos)
 {
@@ -282,19 +311,39 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
         u8 *to_send;
         int rc;
 
+        /* Add command byte + length + 2 byte crc */
+        const int SEND_SIZE = count + 4;
+        const u8 COMMAND_BYTE = 0x03;
+
         printk("In write\n");
 
-        to_send = kmalloc(count, GFP_KERNEL);
+        if ((rc = validate_write_size(count)))
+                return rc;
+
+        to_send = kmalloc(SEND_SIZE, GFP_KERNEL);
         if (!to_send)
                 return -ENOMEM;
 
-        if (copy_from_user(to_send, buf, count)){
+        /* Write the header */
+        to_send[0] = COMMAND_BYTE;
+        /* Length byte = user size + crc size + length byte */
+        to_send[1] = count + 2 + 1;
+
+        if (copy_from_user(&to_send[2], buf, count)){
                 rc = -EFAULT;
                 return rc;
         }
 
-        rc = atsha204_i2c_transaction(chip->client, to_send, count,
+        atsha204_i2c_crc_command(to_send, SEND_SIZE);
+
+        rc = atsha204_i2c_transaction(chip->client, to_send, SEND_SIZE,
                                       &priv->buf);
+
+        /* Return to the user the number of bytes that the
+           user provided, don't include the extra header / crc
+           bytes */
+        if (SEND_SIZE == rc)
+                rc = count;
 
         kfree(to_send);
 
