@@ -138,22 +138,22 @@ out:
 }
 
 
-int atsha204_i2c_receive(const struct i2c_client *client,
-                         u8 *kbuf, const int len)
-{
-        u16 *crc_in_buf;
-        u16 crc;
-        int rc;
+/* int atsha204_i2c_receive(const struct i2c_client *client, */
+/*                          u8 *kbuf, const int len) */
+/* { */
+/*         u16 *crc_in_buf; */
+/*         u16 crc; */
+/*         int rc; */
 
-        if ((rc = i2c_master_recv(client, kbuf, len)) == len){
-                crc_in_buf = &kbuf[len - 2];
-                crc = atsha204_crc16(kbuf, len - 2);
-                if (!atsha204_check_rsp_crc16(kbuf, len))
-                        rc = -EBADMSG;
-        }
+/*         if ((rc = i2c_master_recv(client, kbuf, len)) == len){ */
+/*                 crc_in_buf = &kbuf[len - 2]; */
+/*                 crc = atsha204_crc16(kbuf, len - 2); */
+/*                 if (!atsha204_check_rsp_crc16(kbuf, len)) */
+/*                         rc = -EBADMSG; */
+/*         } */
 
-        return rc;
-}
+/*         return rc; */
+/* } */
 
 u16 atsha204_crc16(const u8 *buf, const u8 len)
 {
@@ -345,6 +345,10 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
         if (SEND_SIZE == rc)
                 rc = count;
 
+        /* Reset the f_pos, which indicates the read position in the
+           buffer. Byte 1 points at the start of the data */
+        *f_pos = 1;
+
         kfree(to_send);
 
         return rc;
@@ -355,18 +359,40 @@ ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
 {
         struct atsha204_file_priv *priv = filep->private_data;
         struct atsha204_buffer *r_buf = &priv->buf;
+        ssize_t rc = 0;
+        /* r_buf has 3 extra bytes that should not be returned to the
+           user. The first byte (length) and the last two (crc).
+           However, since f_pos is reset to 1 on write, only subtract
+           2 here.
+        */
+        const int MAX_REC_LEN = r_buf->len - 2;
 
-        int rc;
+        /* printk("Count: %d Max len: %d, Buff len: %d f_pos: %d\n", */
+        /*        count, MAX_REC_LEN, r_buf->len, *f_pos); */
 
-        int size_data = (count > r_buf->len) ? r_buf->len : count;
 
-        if (copy_to_user(buf, &r_buf->ptr[1], size_data)){
+        /* Check the CRC on the rec buffer on the first read */
+        if (*f_pos == 1 && !atsha204_check_rsp_crc16(r_buf->ptr, r_buf->len)){
+                rc = -EBADMSG;
+                printk("%s\n", "CRC on received buffer failed.");
+                goto out;
+        }
+
+        if (*f_pos >= MAX_REC_LEN)
+                goto out;
+
+        if (*f_pos + count > MAX_REC_LEN)
+                count = MAX_REC_LEN - *f_pos;
+
+        if ((rc = copy_to_user(buf, &r_buf->ptr[*f_pos], count))){
                 rc = -EFAULT;
         }
         else{
-                rc = size_data;
+                *f_pos += count;
+                rc = count;
         }
 
+out:
         return rc;
 }
 
@@ -384,6 +410,8 @@ int atsha204_i2c_open(struct inode *inode, struct file *filep)
         priv->chip = chip;
 
         filep->private_data = priv;
+
+        filep->f_pos = 0;
 
         return 0;
 
@@ -611,7 +639,7 @@ static ssize_t configzone_show(struct device *dev,
                                char *buf)
 {
         struct atsha204_chip *chip = dev_get_drvdata(dev);
-        int rc, i;
+        int i;
         u16 bytes, word_addr;
         bool keep_going = true;
         u8 param1 = 0; /* indicates configzone region */
