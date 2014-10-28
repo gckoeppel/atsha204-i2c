@@ -12,6 +12,7 @@
 
 static char buf[] = {0x1B, 0x01, 0x00, 0x00};
 static char recv_buf[32];
+const char *filename = "/dev/atsha0";
 
 void print_hex(const char *str, const uint8_t *hex,
                const int len)
@@ -61,13 +62,26 @@ int test_single_byte_read(int fd)
 
 }
 
+int test_multiple_open()
+{
+    int rc = -1;
+
+    rc = open(filename, O_RDWR);
+    perror("Multiple open:");
+
+    if (rc != 0) {
+        /* success */
+        rc = 0;
+    }
+
+    return rc;
+}
+
 int main()
 {
-
-
     int file;
     int rc = 0;
-    char *filename = "/dev/atsha0";
+
     //static char buf[] = {0x03, 0x07, 0x1B, 0x01, 0x00, 0x00, 0x27,
     //0x47};
 
@@ -98,6 +112,12 @@ int main()
 
     if (test_single_byte_read(file) != 0){
         printf("Single byte read failed\n");
+        rc = 1;
+        goto close_exit;
+    }
+
+    if (test_multiple_open()){
+        printf("Multiple open failed\n");
         rc = 1;
         goto close_exit;
     }

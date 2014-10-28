@@ -18,13 +18,14 @@
 #include <linux/mutex.h>
 #include <linux/kfifo.h>
 #include <linux/uaccess.h>
-#include "atsha204-i2c.h"
 #include <linux/crc16.h>
 #include <linux/bitrev.h>
 #include <linux/delay.h>
+#include <linux/atomic.h>
+#include "atsha204-i2c.h"
 
 struct atsha204_chip *global_chip = NULL;
-
+static atomic_t atsha204_avail = ATOMIC_INIT(1);
 
 void atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
 {
@@ -407,8 +408,14 @@ int atsha204_i2c_open(struct inode *inode, struct file *filep)
         struct miscdevice *misc = filep->private_data;
         struct atsha204_chip *chip = container_of(misc, struct atsha204_chip,
                                                   miscdev);
+        struct atsha204_file_priv *priv;
 
-        struct atsha204_file_priv *priv = kzalloc(sizeof(*priv), GFP_KERNEL);
+        if (!atomic_dec_and_test(&atsha204_avail)){
+                atomic_inc(&atsha204_avail);
+                return -EBUSY;
+        }
+
+        priv = kzalloc(sizeof(*priv), GFP_KERNEL);
         if (NULL == priv)
                 return -ENOMEM;
 
@@ -425,6 +432,8 @@ int atsha204_i2c_open(struct inode *inode, struct file *filep)
 
 int atsha204_i2c_release(struct inode *inode, struct file *filep)
 {
+
+        atomic_inc(&atsha204_avail);
 
         return 0;
 }
