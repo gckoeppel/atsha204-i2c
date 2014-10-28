@@ -23,7 +23,7 @@
 #include <linux/bitrev.h>
 #include <linux/delay.h>
 
-struct i2c_client *client_for_rand = NULL;
+struct atsha204_chip *global_chip = NULL;
 
 
 void atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
@@ -62,13 +62,12 @@ int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
         int rc;
         struct atsha204_buffer recv = {0,0};
         int rnd_len;
-        const struct i2c_client *client = client_for_rand;
 
         const u8 rand_cmd[] = {0x03, 0x07, 0x1b, 0x01, 0x00, 0x00, 0x27, 0x47};
 
         printk("In get random\n");
 
-        rc = atsha204_i2c_transaction(client, rand_cmd, sizeof(rand_cmd),
+        rc = atsha204_i2c_transaction(global_chip, rand_cmd, sizeof(rand_cmd),
                                       &recv);
         if (sizeof(rand_cmd) == rc){
 
@@ -89,9 +88,10 @@ int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 
 }
 
-int atsha204_i2c_transaction(const struct i2c_client *client,
+int atsha204_i2c_transaction(struct atsha204_chip *chip,
                              const u8* to_send, size_t to_send_len,
                              struct atsha204_buffer *buf)
+
 
 {
         int rc;
@@ -100,17 +100,21 @@ int atsha204_i2c_transaction(const struct i2c_client *client,
         int total_sleep = 60;
         int packet_len;
 
+        mutex_lock(&chip->transaction_mutex);
+
         atsha204_print_hex_string("About to send", to_send, to_send_len);
 
         /* Begin i2c transactions */
-        if ((rc = atsha204_i2c_wakeup(client)))
+        if ((rc = atsha204_i2c_wakeup(chip->client)))
                 goto out;
 
-        if ((rc = i2c_master_send(client, to_send, to_send_len)) != to_send_len)
+        if ((rc = i2c_master_send(chip->client, to_send, to_send_len))
+            != to_send_len)
                 goto out;
 
         /* Poll for the response */
-        while (4 != i2c_master_recv(client, status_packet, 4) && total_sleep > 0){
+        while (4 != i2c_master_recv(chip->client, status_packet, 4)
+               && total_sleep > 0){
                 total_sleep = total_sleep - 4;
                 msleep(4);
         }
@@ -120,9 +124,9 @@ int atsha204_i2c_transaction(const struct i2c_client *client,
            timer, so don't allow sleeps here*/
         recv_buf = kmalloc(packet_len, GFP_ATOMIC);
         memcpy(recv_buf, status_packet, sizeof(status_packet));
-        rc = i2c_master_recv(client, recv_buf + 4, packet_len - 4);
+        rc = i2c_master_recv(chip->client, recv_buf + 4, packet_len - 4);
 
-        atsha204_i2c_idle(client);
+        atsha204_i2c_idle(chip->client);
 
         /* Store the entire packet. Other functions must check the CRC
            and strip of the length byte */
@@ -133,6 +137,7 @@ int atsha204_i2c_transaction(const struct i2c_client *client,
 
         rc = to_send_len;
 out:
+        mutex_unlock(&chip->transaction_mutex);
         return rc;
 
 }
@@ -336,7 +341,7 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
 
         atsha204_i2c_crc_command(to_send, SEND_SIZE);
 
-        rc = atsha204_i2c_transaction(chip->client, to_send, SEND_SIZE,
+        rc = atsha204_i2c_transaction(chip, to_send, SEND_SIZE,
                                       &priv->buf);
 
         /* Return to the user the number of bytes that the
@@ -447,6 +452,8 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
 
         chip->client = client;
 
+        mutex_init(&chip->transaction_mutex);
+
         if (atsha204_i2c_add_device(chip))
                 goto put_device;
         else{
@@ -480,12 +487,13 @@ int atsha204_i2c_probe(struct i2c_client *client,
                 printk("%s", "Device is awake\n");
                 atsha204_i2c_idle(client);
 
-                client_for_rand = client;
-
                 if ((chip = atsha204_i2c_register_hardware(dev, client))
                     == NULL){
-                        client_for_rand = NULL;
                         return -ENODEV;
+                }
+
+                else {
+                        global_chip = chip;
                 }
 
                 result = atsha204_sysfs_add_device(chip);
@@ -515,7 +523,7 @@ int atsha204_i2c_remove(struct i2c_client *client)
 
         kfree(chip);
 
-        client_for_rand = NULL;
+        global_chip = NULL;
 
         /* The device is in an idle state, where it keeps ephemeral
          * memory. Wakeup the device and sleep it, which will cause it
@@ -591,7 +599,7 @@ int atsha204_i2c_add_device(struct atsha204_chip *chip)
         return retval;
 }
 
-int atsha204_i2c_read4(const struct i2c_client *client, u8 *read_buf,
+int atsha204_i2c_read4(struct atsha204_chip *chip, u8 *read_buf,
                        const u16 addr, const u8 param1)
 {
         u8 read_cmd[8] = {0};
@@ -612,7 +620,8 @@ int atsha204_i2c_read4(const struct i2c_client *client, u8 *read_buf,
         read_cmd[6] = cpu_to_le16(crc) & 0xFF;
         read_cmd[7] = cpu_to_le16(crc) >> 8;
 
-        rc = atsha204_i2c_transaction(client, read_cmd, sizeof(read_cmd), &rsp);
+        rc = atsha204_i2c_transaction(chip, read_cmd,
+                                      sizeof(read_cmd), &rsp);
 
         if (sizeof(read_cmd) == rc){
                 if ((validate_status = atsha204_i2c_validate_rsp(&rsp, &msg))
@@ -649,7 +658,7 @@ static ssize_t configzone_show(struct device *dev,
 
         for (bytes = 0; bytes < sizeof(configzone) && keep_going; bytes += 4){
                 word_addr = bytes / 4;
-                if (4 != atsha204_i2c_read4(chip->client,
+                if (4 != atsha204_i2c_read4(chip,
                                             &configzone[bytes],
                                             word_addr, param1)){
                         keep_going = false;
@@ -682,7 +691,7 @@ static ssize_t serialnum_show(struct device *dev,
 
         for (bytes = 0; bytes < sizeof(serial) && keep_going; bytes += 4){
                 word_addr = bytes / 4;
-                if (4 != atsha204_i2c_read4(chip->client,
+                if (4 != atsha204_i2c_read4(chip,
                                             &serial[bytes],
                                             word_addr, param1)){
                         keep_going = false;
@@ -712,7 +721,7 @@ static ssize_t is_locked(struct device *dev,
         u8 lock_buf[4];
         const u8 UNLOCKED = 0x55;
 
-        if (sizeof(lock_buf) == atsha204_i2c_read4(chip->client,
+        if (sizeof(lock_buf) == atsha204_i2c_read4(chip,
                                                    lock_buf,
                                                    LOCK_ADDR, param1)){
 

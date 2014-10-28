@@ -16,6 +16,7 @@
 #include <linux/i2c.h>
 #include <linux/device.h>
 #include <linux/hw_random.h>
+#include <linux/mutex.h>
 
 #define ATSHA204_I2C_VERSION "0.1"
 #define ATSHA204_SLEEP 0x01
@@ -30,8 +31,7 @@ struct atsha204_chip {
 
     struct i2c_client *client;
     struct miscdevice miscdev;
-
-
+    struct mutex transaction_mutex;
 };
 
 struct atsha204_cmd_metadata {
@@ -88,7 +88,7 @@ int atsha204_i2c_wakeup(const struct i2c_client *client);
 int atsha204_i2c_idle(const struct i2c_client *client);
 int atsha204_i2c_transmit(const struct i2c_client *client,
                           const char __user *buf, size_t len);
-int atsha204_i2c_transaction(const struct i2c_client *client,
+int atsha204_i2c_transaction(struct atsha204_chip *chip,
                              const u8* to_send, size_t to_send_len,
                              struct atsha204_buffer *buf);
 int atsha204_i2c_get_random(u8 *to_fill, const size_t max);
