@@ -114,7 +114,4 @@ static struct hwrng atsha204_i2c_rng = {
 /* Validation functions */
 int validate_write_size(const size_t count);
 
-/* Debug */
-void atsha204_print_hex_string(const char *str, const u8 *hex, const int len);
-
 #endif /* _ATSHA204_I2C_H_ */

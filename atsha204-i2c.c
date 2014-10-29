@@ -21,27 +21,11 @@
 #include <linux/bitrev.h>
 #include <linux/delay.h>
 #include <linux/atomic.h>
+#include <linux/printk.h>
 #include "atsha204-i2c.h"
 
 struct atsha204_chip *global_chip = NULL;
 static atomic_t atsha204_avail = ATOMIC_INIT(1);
-
-void atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
-{
-
-        int i;
-
-        printk("%s : ", str);
-
-        for (i = 0; i < len; i++)
-        {
-                if (i > 0) printk(" ");
-                printk("0x%02X", hex[i]);
-        }
-
-        printk("\n");
-
-}
 
 int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 {
@@ -51,23 +35,23 @@ int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 
         const u8 rand_cmd[] = {0x03, 0x07, 0x1b, 0x01, 0x00, 0x00, 0x27, 0x47};
 
-        printk("In get random\n");
-
         rc = atsha204_i2c_transaction(global_chip, rand_cmd, sizeof(rand_cmd),
                                       &recv);
         if (sizeof(rand_cmd) == rc){
 
-                if (!atsha204_check_rsp_crc16(recv.ptr, recv.len))
+                if (!atsha204_check_rsp_crc16(recv.ptr, recv.len)){
                         rc = -EBADMSG;
+                        dev_err(global_chip->dev, "%s\n", "Bad CRC on Random");
+                }
                 else{
                         rnd_len = (max > recv.len - 3) ? recv.len - 3 : max;
                         memcpy(to_fill, &recv.ptr[1], rnd_len);
                         rc = rnd_len;
+                        dev_info(global_chip->dev, "%s: %d\n",
+                                 "Returning randoom bytes", rc);
                 }
 
         }
-
-        printk("%s %d:%d\n", "Returning random data", rc, max);
 
         return rc;
 
@@ -88,7 +72,10 @@ int atsha204_i2c_transaction(struct atsha204_chip *chip,
 
         mutex_lock(&chip->transaction_mutex);
 
-        atsha204_print_hex_string("About to send", to_send, to_send_len);
+        dev_dbg(chip->dev, "%s\n", "About to send to device.");
+        print_hex_dump_bytes("Sending : ", DUMP_PREFIX_OFFSET,
+                             to_send, to_send_len);
+
 
         /* Begin i2c transactions */
         if ((rc = atsha204_i2c_wakeup(chip->client)))
@@ -119,7 +106,9 @@ int atsha204_i2c_transaction(struct atsha204_chip *chip,
         buf->ptr = recv_buf;
         buf->len = packet_len;
 
-        atsha204_print_hex_string("Received", recv_buf, packet_len);
+        dev_dbg(chip->dev, "%s\n", "Received from device.");
+        print_hex_dump_bytes("Received: ", DUMP_PREFIX_OFFSET,
+                             recv_buf, packet_len);
 
         rc = to_send_len;
 out:
@@ -128,23 +117,6 @@ out:
 
 }
 
-
-/* int atsha204_i2c_receive(const struct i2c_client *client, */
-/*                          u8 *kbuf, const int len) */
-/* { */
-/*         u16 *crc_in_buf; */
-/*         u16 crc; */
-/*         int rc; */
-
-/*         if ((rc = i2c_master_recv(client, kbuf, len)) == len){ */
-/*                 crc_in_buf = &kbuf[len - 2]; */
-/*                 crc = atsha204_crc16(kbuf, len - 2); */
-/*                 if (!atsha204_check_rsp_crc16(kbuf, len)) */
-/*                         rc = -EBADMSG; */
-/*         } */
-
-/*         return rc; */
-/* } */
 
 u16 atsha204_crc16(const u8 *buf, const u8 len)
 {
@@ -211,22 +183,18 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
 
         while (!is_awake){
                 if (4 == i2c_master_send(client, buf, 4)){
-                        printk("%s\n", "OK, we're awake.");
+                        pr_debug("%s\n", "ATSHA204 Device is awake.");
                         is_awake = true;
 
                         if (4 == i2c_master_recv(client, buf, 4)){
-                                printk("%s", "Received wakeup: ");
-                                printk("%x:", buf[0]);
-                                printk("%x:", buf[1]);
-                                printk("%x:", buf[2]);
-                                printk("%x\n", buf[3]);
+                                pr_debug("%s", "ATSHA204 Received wakeup\n");
                         }
 
 
                         if (atsha204_check_rsp_crc16(buf,4))
                                 retval = 0;
                         else
-                                printk("%s\n", "CRC failure");
+                                pr_err("%s\n", "ATSHA204 Wakeup CRC failure");
 
 
                 }
@@ -259,8 +227,9 @@ int atsha204_i2c_sleep(const struct i2c_client *client)
 
         if ((retval = i2c_master_send(client,to_send,1)) == 1)
                 retval = 0;
+        else
+                pr_err("%s: 0x%x\n", "ATSHA204 failed to sleep", client->addr);
 
-        printk("Device sleep status: %d\n", retval);
         return retval;
 
 }
@@ -306,8 +275,6 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
         const int SEND_SIZE = count + 4;
         const u8 COMMAND_BYTE = 0x03;
 
-        printk("In write\n");
-
         if ((rc = validate_write_size(count)))
                 return rc;
 
@@ -349,6 +316,7 @@ ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
                           loff_t *f_pos)
 {
         struct atsha204_file_priv *priv = filep->private_data;
+        struct atsha204_chip *chip = priv->chip;
         struct atsha204_buffer *r_buf = &priv->buf;
         ssize_t rc = 0;
         /* r_buf has 3 extra bytes that should not be returned to the
@@ -358,14 +326,10 @@ ssize_t atsha204_i2c_read(struct file *filep, char __user *buf, size_t count,
         */
         const int MAX_REC_LEN = r_buf->len - 2;
 
-        /* printk("Count: %d Max len: %d, Buff len: %d f_pos: %d\n", */
-        /*        count, MAX_REC_LEN, r_buf->len, *f_pos); */
-
-
         /* Check the CRC on the rec buffer on the first read */
         if (*f_pos == 1 && !atsha204_check_rsp_crc16(r_buf->ptr, r_buf->len)){
                 rc = -EBADMSG;
-                printk("%s\n", "CRC on received buffer failed.");
+                dev_err(chip->dev, "%s\n", "CRC on received buffer failed.");
                 goto out;
         }
 
@@ -432,8 +396,6 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
 
         struct atsha204_chip *chip;
 
-        printk("%s\n", "In register hardware");
-
         if ((chip = kzalloc(sizeof(*chip), GFP_KERNEL)) == NULL)
                 goto out_null;
 
@@ -448,11 +410,13 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
 
         mutex_init(&chip->transaction_mutex);
 
-        if (atsha204_i2c_add_device(chip))
+        if (atsha204_i2c_add_device(chip)){
+                dev_err(dev, "%s\n", "Failed to add device");
                 goto put_device;
+        }
         else{
                 int rc = hwrng_register(&atsha204_i2c_rng);
-                printk("%s%d\n", "HWRNG result: ", rc);
+                dev_dbg(dev, "%s%d\n", "HWRNG result: ", rc);
         }
 
 
@@ -478,7 +442,9 @@ int atsha204_i2c_probe(struct i2c_client *client,
                 return -ENODEV;
 
         if((result = atsha204_i2c_wakeup(client)) == 0){
-                printk("%s", "Device is awake\n");
+                pr_debug("%s: 0x%x\n", "ATSHA204 Device is awake",
+                         client->addr);
+
                 atsha204_i2c_idle(client);
 
                 if ((chip = atsha204_i2c_register_hardware(dev, client))
@@ -494,7 +460,8 @@ int atsha204_i2c_probe(struct i2c_client *client,
         }
 
         else{
-                printk("%s", "Device failed to wake\n");
+                pr_err("%s: 0x%x\n", "ATSHA204 device failed to wake",
+                       client->addr);
         }
 
         return result;
@@ -505,8 +472,6 @@ int atsha204_i2c_remove(struct i2c_client *client)
 {
         struct device *dev = &(client->dev);
         struct atsha204_chip *chip = dev_get_drvdata(dev);
-
-        printk("%s\n", "Remove called");
 
         if (chip){
                 misc_deregister(&chip->miscdev);
@@ -573,7 +538,6 @@ int atsha204_i2c_add_device(struct atsha204_chip *chip)
 {
         int retval;
 
-        printk("%s\n", "In add device");
         chip->miscdev.fops = &atsha204_i2c_fops;
         chip->miscdev.minor = MISC_DYNAMIC_MINOR;
 
@@ -620,7 +584,6 @@ int atsha204_i2c_read4(struct atsha204_chip *chip, u8 *read_buf,
         if (sizeof(read_cmd) == rc){
                 if ((validate_status = atsha204_i2c_validate_rsp(&rsp, &msg))
                     == 0){
-                        atsha204_print_hex_string("Read 4 bytes", msg.ptr, msg.len);
                         memcpy(read_buf, msg.ptr, msg.len);
                         kfree(rsp.ptr);
                         rc = msg.len;
@@ -718,8 +681,6 @@ static ssize_t is_locked(struct device *dev,
         if (sizeof(lock_buf) == atsha204_i2c_read4(chip,
                                                    lock_buf,
                                                    LOCK_ADDR, param1)){
-
-                atsha204_print_hex_string("Lock data", lock_buf, 4);
 
                 if (UNLOCKED == lock_buf[offset])
                         str += sprintf(str, "0");
