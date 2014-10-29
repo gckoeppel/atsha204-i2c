@@ -43,20 +43,6 @@ void atsha204_print_hex_string(const char *str, const u8 *hex, const int len)
 
 }
 
-void atsha204_i2c_set_cmd_parameters(struct atsha204_cmd_metadata *cmd,
-                                     u8 opcode)
-{
-        switch (opcode) {
-        case 0x1b:
-                printk("%s/n", "RANDOM Command");
-                atsha204_set_params(cmd, 32, 50);
-                break;
-        default:
-                atsha204_set_params(cmd, 0, 0);
-
-        }
-}
-
 int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 {
         int rc;
