@@ -1,6 +1,12 @@
 atsha204-i2c
 =======
 
+<a href="https://scan.coverity.com/projects/3415">
+  <img alt="Coverity Scan Build Status"
+       src="https://scan.coverity.com/projects/3415/badge.svg"/>
+</a>
+
+
 Kernel module for Atmel's ATSHA204 I2C device.
 
 This software is in ***ALPHA***. It is subject to drastic refactoring
@@ -18,7 +24,7 @@ SYSFS
 
 The systfs looks like this:
 
-.
+```
 |-- configlocked
 |-- configzone
 |-- datalocked
@@ -46,6 +52,7 @@ The systfs looks like this:
 |-- serialnum
 |-- subsystem -> ../../../../../bus/i2c
 `-- uevent
+```
 
 The unique features are: configlocked, configzone, datalocked, and
 serialnum.
@@ -69,7 +76,9 @@ for how to use / switch random number generators.
 The driver handles the communication layer. It expects commands in the
 format:
 
+```
 [Opcode (1)][Param1 (1)][Param2 (2)][[Data (x)]]
+```
 
 The number indicate the number of bytes. Data is optional. The data
 must be written to the fd in one shot. The driver will pre-pend the
