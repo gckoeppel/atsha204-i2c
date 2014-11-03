@@ -4,4 +4,4 @@ compiler:
   - clang
 # Change this to your needs
 before_install: sudo apt-get install linux-headers-$(uname -r)
-#script: ./autogen.sh
+script: make
