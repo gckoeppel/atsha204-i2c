@@ -1,3 +1,4 @@
+[![Stories in Ready](https://badge.waffle.io/cryptotronix/atsha204-i2c.png?label=ready&title=Ready)](https://waffle.io/cryptotronix/atsha204-i2c)
 atsha204-i2c
 =======
 
