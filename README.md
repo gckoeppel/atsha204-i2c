@@ -1,11 +1,11 @@
-[![Stories in Ready](https://badge.waffle.io/cryptotronix/atsha204-i2c.png?label=ready&title=Ready)](https://waffle.io/cryptotronix/atsha204-i2c)
+
 atsha204-i2c
 =======
 
 <a href="https://scan.coverity.com/projects/3415">
   <img alt="Coverity Scan Build Status"
        src="https://scan.coverity.com/projects/3415/badge.svg"/>
-</a>
+</a>[![Stories in Ready](https://badge.waffle.io/cryptotronix/atsha204-i2c.png?label=ready&title=Ready)](https://waffle.io/cryptotronix/atsha204-i2c)
 
 
 Kernel module for Atmel's ATSHA204 I2C device.
@@ -68,7 +68,7 @@ configzone dumps the chip's entire configuration zone.
 RANDOM
 -----
 
-This driver plugs into /dev/hwrng. See the /dev/hwrng documentation
+This driver plugs into /dev/hwrng. See the /dev/hwrng [documentation](https://www.kernel.org/doc/Documentation/hw_random.txt)
 for how to use / switch random number generators.
 
 /dev/atshaX
