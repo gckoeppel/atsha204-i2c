@@ -1,6 +1,7 @@
 /.tmp_versions/
 *.cmd
 *.ko
+*.o
 
 /Module.symvers
 /atsha204-i2c.mod.c
@@ -11,4 +12,5 @@
 /hwcrypt.o
 /modules.order
 /test/test
+/test/test.o
 /TAGS
