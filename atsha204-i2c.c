@@ -181,7 +181,7 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
 
         u8 buf[4] = {0};
 
-        unsigned short int try_con =1;
+        unsigned short int try_con = 1;
 
         while (!is_awake){
                 if (4 == i2c_master_send(client, buf, 4)){
