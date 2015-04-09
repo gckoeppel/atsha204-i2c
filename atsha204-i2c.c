@@ -299,6 +299,7 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
 
         if (copy_from_user(&to_send[2], buf, count)){
                 rc = -EFAULT;
+                kfree(to_send);
                 return rc;
         }
 
