@@ -44,7 +44,7 @@ int test_single_byte_read(int fd)
         exit(1);
     }
     else{
-        printf("Wrote %d bytes\n", sizeof(buf));
+        printf("Wrote %lu bytes\n", sizeof(buf));
     }
 
     for (i = 0; i < sizeof(recv_buf); i++){
@@ -98,7 +98,7 @@ int main()
         exit(1);
     }
     else{
-        printf("Wrote %d bytes\n", sizeof(buf));
+        printf("Wrote %lu bytes\n", sizeof(buf));
     }
 
     if (sizeof(recv_buf) != read(file,recv_buf,sizeof(recv_buf))){
@@ -106,7 +106,7 @@ int main()
         exit(1);
     }
     else{
-        printf("Read %d bytes\n", sizeof(recv_buf));
+        printf("Read %lu bytes\n", sizeof(recv_buf));
         print_hex("Received data", recv_buf, sizeof(recv_buf));
     }
 

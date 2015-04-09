@@ -181,6 +181,8 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
 
         u8 buf[4] = {0};
 
+        unsigned short int try_con = 1;
+
         while (!is_awake){
                 if (4 == i2c_master_send(client, buf, 4)){
                         pr_debug("%s\n", "ATSHA204 Device is awake.");
@@ -200,13 +202,21 @@ int atsha204_i2c_wakeup(const struct i2c_client *client)
                 }
                 else{
                         /* is_awake is already false */
+                        pr_info("Attempting Wakeup : %u\n",try_con);
+                        if(try_con >= 10){
+                                pr_err("Wakeup Failed. No Device");
+                                return retval;
+                        }
                 }
+
+                ++try_con;
         }
 
         retval = 0;
         return retval;
 
 }
+
 
 int atsha204_i2c_idle(const struct i2c_client *client)
 {
@@ -237,10 +247,10 @@ int atsha204_i2c_sleep(const struct i2c_client *client)
 void atsha204_i2c_crc_command(u8 *cmd, int len)
 {
         /* The command packet is:
-        [0x03] [Length=1 + command + CRC] [cmd] [crc]
+           [0x03] [Length=1 + command + CRC] [cmd] [crc]
 
-        The CRC is calculated over:
-        CRC([Len] [cmd]) */
+           The CRC is calculated over:
+           CRC([Len] [cmd]) */
         int crc_data_len = len - 2 - 1;
         u16 crc = atsha204_crc16(&cmd[1], crc_data_len);
 
@@ -289,6 +299,7 @@ ssize_t atsha204_i2c_write(struct file *filep, const char __user *buf,
 
         if (copy_from_user(&to_send[2], buf, count)){
                 rc = -EFAULT;
+                kfree(to_send);
                 return rc;
         }
 
@@ -432,7 +443,7 @@ out_null:
 
 
 int atsha204_i2c_probe(struct i2c_client *client,
-                              const struct i2c_device_id *id)
+                       const struct i2c_device_id *id)
 {
         int result = -1;
         struct device *dev = &client->dev;
