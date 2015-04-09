@@ -13,7 +13,6 @@ all:
 
 clean:
 	make -C $(KDIR) M=$$PWD clean
-	-sudo rmmod atsha204-i2c
 	-rm -rf $$PWD/test/test.o $$PWD/test/test TAGS
 
 install:
