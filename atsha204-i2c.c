@@ -148,7 +148,7 @@ bool atsha204_crc16_matches(const u8 *buf, const u8 len, const u16 crc)
 
 bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len)
 {
-        u16 *rec_crc = &buf[len - 2];
+        const u16 *rec_crc = (const u16 *)&buf[len - 2];
         return atsha204_crc16_matches(buf, len - 2, cpu_to_le16(*rec_crc));
 }
 
