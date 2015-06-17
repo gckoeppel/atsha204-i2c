@@ -404,8 +404,8 @@ int atsha204_i2c_release(struct inode *inode, struct file *filep)
 struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
                                                      struct i2c_client *client)
 {
-
         struct atsha204_chip *chip;
+        int rc;
 
         if ((chip = kzalloc(sizeof(*chip), GFP_KERNEL)) == NULL)
                 goto out_null;
@@ -425,11 +425,11 @@ struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
                 dev_err(dev, "%s\n", "Failed to add device");
                 goto put_device;
         }
-        else{
-                int rc = hwrng_register(&atsha204_i2c_rng);
-                dev_dbg(dev, "%s%d\n", "HWRNG result: ", rc);
-        }
 
+        global_chip = chip;
+
+        rc = hwrng_register(&atsha204_i2c_rng);
+        dev_dbg(dev, "%s%d\n", "HWRNG result: ", rc);
 
         return chip;
 
