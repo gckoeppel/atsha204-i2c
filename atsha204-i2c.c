@@ -48,7 +48,7 @@ int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
                         memcpy(to_fill, &recv.ptr[1], rnd_len);
                         rc = rnd_len;
                         dev_info(global_chip->dev, "%s: %d\n",
-                                 "Returning randoom bytes", rc);
+                                 "Returning random bytes", rc);
                 }
 
         }
@@ -73,13 +73,13 @@ int atsha204_i2c_transaction(struct atsha204_chip *chip,
         mutex_lock(&chip->transaction_mutex);
 
         dev_dbg(chip->dev, "%s\n", "About to send to device.");
-        print_hex_dump_bytes("Sending : ", DUMP_PREFIX_OFFSET,
-                             to_send, to_send_len);
-
 
         /* Begin i2c transactions */
         if ((rc = atsha204_i2c_wakeup(chip->client)))
                 goto out;
+
+        print_hex_dump_bytes("Sending : ", DUMP_PREFIX_OFFSET,
+                             to_send, to_send_len);
 
         if ((rc = i2c_master_send(chip->client, to_send, to_send_len))
             != to_send_len)
@@ -99,8 +99,6 @@ int atsha204_i2c_transaction(struct atsha204_chip *chip,
         memcpy(recv_buf, status_packet, sizeof(status_packet));
         rc = i2c_master_recv(chip->client, recv_buf + 4, packet_len - 4);
 
-        atsha204_i2c_idle(chip->client);
-
         /* Store the entire packet. Other functions must check the CRC
            and strip of the length byte */
         buf->ptr = recv_buf;
@@ -109,6 +107,8 @@ int atsha204_i2c_transaction(struct atsha204_chip *chip,
         dev_dbg(chip->dev, "%s\n", "Received from device.");
         print_hex_dump_bytes("Received: ", DUMP_PREFIX_OFFSET,
                              recv_buf, packet_len);
+
+        atsha204_i2c_idle(chip->client);
 
         rc = to_send_len;
 out:
@@ -176,54 +176,69 @@ out:
 
 int atsha204_i2c_wakeup(const struct i2c_client *client)
 {
+        const struct device *dev = &client->dev;
         bool is_awake = false;
         int retval = -ENODEV;
-
+        struct i2c_msg msg;
         u8 buf[4] = {0};
-
         unsigned short int try_con = 1;
 
+        /* Set wake-up token message */
+        msg.addr = 0;
+        msg.flags = 0;
+        msg.buf = buf;
+        msg.len = 1;
+
         while (!is_awake){
-                if (4 == i2c_master_send(client, buf, 4)){
-                        pr_debug("%s\n", "ATSHA204 Device is awake.");
+                dev_dbg(dev, "Send wake-up (%u)\n", try_con);
+                /* To wake up the device you need to hold SDA low for at least
+                 * 60us (tWLO). There is no way to do this explicitly in
+                 * Linux, so attempt to send 0 to address 0. This will hold
+                 * SDA low for 8 clock cycles (sending the address), which
+                 * will work as long as the I2C clock speed is less than
+                 * 133kHz.
+                 */
+                buf[0] = 0;
+                i2c_transfer(client->adapter, &msg, 1);
+                /* Delay for tWHI before reading the response. */
+                udelay(client->addr == 0x60 ? ATECC108_W_HI : ATSHA204_W_HI);
+                /* Read the response. */
+                if (4 == i2c_master_recv(client, buf, 4)){
+                        dev_dbg(dev, "Chip is awake\n");
                         is_awake = true;
 
-                        if (4 == i2c_master_recv(client, buf, 4)){
-                                pr_debug("%s", "ATSHA204 Received wakeup\n");
-                        }
-
-
-                        if (atsha204_check_rsp_crc16(buf,4))
+                        if (atsha204_check_rsp_crc16(buf,4)){
+                            if (buf[1] == 0x11){
+                                dev_dbg(dev, "Wakeup response OK\n");
                                 retval = 0;
-                        else
-                                pr_err("%s\n", "ATSHA204 Wakeup CRC failure");
-
-
-                }
-                else{
-                        /* is_awake is already false */
-                        pr_info("Attempting Wakeup : %u\n",try_con);
-                        if(try_con >= 10){
-                                pr_err("Wakeup Failed. No Device");
-                                return retval;
+                            } else {
+                                dev_err(dev, "Wakeup response incorrect (0x%x)\n", buf[1]);
+                                retval = EIO;
+                            }
+                        } else {
+                                dev_err(dev, "Wakeup CRC failure\n");
+                                retval = EIO;
+                        }
+                } else {
+                        if(++try_con >= 5){
+                                dev_err(dev, "Wakeup failed. No Device\n");
+                                break;
                         }
                 }
-
-                ++try_con;
         }
 
-        retval = 0;
         return retval;
-
 }
 
 
 int atsha204_i2c_idle(const struct i2c_client *client)
 {
+        const struct device *dev = &client->dev;
         int rc;
 
         u8 idle_cmd[1] = {0x02};
 
+        dev_dbg(dev, "Send idle\n");
         rc = i2c_master_send(client, idle_cmd, 1);
 
         return rc;
@@ -232,13 +247,15 @@ int atsha204_i2c_idle(const struct i2c_client *client)
 
 int atsha204_i2c_sleep(const struct i2c_client *client)
 {
+        const struct device *dev = &client->dev;
         int retval;
         char to_send[1] = {ATSHA204_SLEEP};
 
+        dev_dbg(dev, "Send sleep\n");
         if ((retval = i2c_master_send(client,to_send,1)) == 1)
                 retval = 0;
         else
-                pr_err("%s: 0x%x\n", "ATSHA204 failed to sleep", client->addr);
+                dev_err(dev, "Failed to sleep\n");
 
         return retval;
 
@@ -453,9 +470,6 @@ int atsha204_i2c_probe(struct i2c_client *client,
                 return -ENODEV;
 
         if((result = atsha204_i2c_wakeup(client)) == 0){
-                pr_debug("%s: 0x%x\n", "ATSHA204 Device is awake",
-                         client->addr);
-
                 atsha204_i2c_idle(client);
 
                 if ((chip = atsha204_i2c_register_hardware(dev, client))
@@ -469,10 +483,8 @@ int atsha204_i2c_probe(struct i2c_client *client,
 
                 result = atsha204_sysfs_add_device(chip);
         }
-
         else{
-                pr_err("%s: 0x%x\n", "ATSHA204 device failed to wake",
-                       client->addr);
+                dev_err(dev, "Device failed to wake\n");
         }
 
         return result;
@@ -481,7 +493,7 @@ int atsha204_i2c_probe(struct i2c_client *client,
 int atsha204_i2c_remove(struct i2c_client *client)
 
 {
-        struct device *dev = &(client->dev);
+        const struct device *dev = &(client->dev);
         struct atsha204_chip *chip = dev_get_drvdata(dev);
 
         if (chip){
