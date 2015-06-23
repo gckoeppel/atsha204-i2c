@@ -28,7 +28,7 @@
 #include <linux/hw_random.h>
 #include <linux/mutex.h>
 
-#define ATSHA204_I2C_VERSION "0.1"
+#define ATSHA204_I2C_VERSION "0.2"
 #define ATSHA204_SLEEP 0x01
 #define ATSHA204_RNG_NAME "atsha-rng"
 
@@ -72,16 +72,6 @@ static const struct i2c_device_id atsha204_i2c_id[] = {
 	{ }
 };
 
-/* Declare functions */
-int atsha204_i2c_get_random(u8 *to_fill, const size_t max);
-int atsha204_i2c_transaction(struct atsha204_chip *chip,
-			     const u8* to_send, size_t to_send_len,
-			     struct atsha204_buffer *buf);
-bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
-int atsha204_i2c_add_device(struct atsha204_chip *chip);
-int atsha204_sysfs_add_device(struct atsha204_chip *chip);
-void atsha204_sysfs_del_device(struct atsha204_chip *chip);
-
 void atsha204_set_params(struct atsha204_cmd_metadata *cmd,
 			 int expected_rec_len,
 			 unsigned long usleep)
@@ -90,52 +80,10 @@ void atsha204_set_params(struct atsha204_cmd_metadata *cmd,
 	cmd->usleep = usleep;
 }
 
-static int atsha204_i2c_rng_read(struct hwrng *rng, void *data,
-				 size_t max, bool wait)
-{
-	return atsha204_i2c_get_random(data, max);
-}
 
-static struct hwrng atsha204_i2c_rng = {
-	.name = ATSHA204_RNG_NAME,
-	.read = atsha204_i2c_rng_read,
-};
 
 struct atsha204_chip *global_chip = NULL;
 static atomic_t atsha204_avail = ATOMIC_INIT(1);
-
-int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
-{
-	int rc;
-	struct atsha204_buffer recv = {0, 0};
-	int rnd_len;
-
-	const u8 rand_cmd[] = {0x03, 0x07, 0x1b, 0x01, 0x00, 0x00, 0x27, 0x47};
-
-	rc = atsha204_i2c_transaction(global_chip, rand_cmd, sizeof(rand_cmd),
-				      &recv);
-	if (sizeof(rand_cmd) == rc) {
-
-		if (!atsha204_check_rsp_crc16(recv.ptr, recv.len)) {
-			rc = -EBADMSG;
-			dev_err(global_chip->dev, "%s\n", "Bad CRC on Random");
-		} else {
-			rnd_len = (max > recv.len - 3) ? recv.len - 3 : max;
-			memcpy(to_fill, &recv.ptr[1], rnd_len);
-			rc = rnd_len;
-			dev_info(global_chip->dev, "%s: %d\n",
-				 "Returning random bytes", rc);
-		}
-
-	}
-
-	return rc;
-
-
-}
-
-
-
 
 u16 atsha204_crc16(const u8 *buf, const u8 len)
 {
@@ -171,28 +119,6 @@ bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len)
 	const u16 *rec_crc = (const u16 *)&buf[len - 2];
 
 	return atsha204_crc16_matches(buf, len - 2, cpu_to_le16(*rec_crc));
-}
-
-int atsha204_i2c_validate_rsp(const struct atsha204_buffer *packet,
-			      struct atsha204_buffer *rsp)
-{
-	int rc;
-
-	if (packet->len < 4)
-		goto out_bad_msg;
-	else if (atsha204_check_rsp_crc16(packet->ptr, packet->len)) {
-		rsp->ptr = packet->ptr + 1;
-		rsp->len = packet->len - 3;
-		rc = 0;
-		goto out;
-	} else {
-		/* CRC failed */
-	}
-
-out_bad_msg:
-	rc = -EBADMSG;
-out:
-	return rc;
 }
 
 int atsha204_i2c_wakeup(const struct i2c_client *client)
@@ -266,22 +192,6 @@ int atsha204_i2c_idle(const struct i2c_client *client)
 
 }
 
-int atsha204_i2c_sleep(const struct i2c_client *client)
-{
-	const struct device *dev = &client->dev;
-	int retval;
-	char to_send[1] = {ATSHA204_SLEEP};
-
-	dev_dbg(dev, "Send sleep\n");
-	retval = i2c_master_send(client, to_send, 1);
-	if (retval == 1)
-		retval = 0;
-	else
-		dev_err(dev, "Failed to sleep\n");
-
-	return retval;
-
-}
 
 int atsha204_i2c_transaction(struct atsha204_chip *chip,
 			     const u8 *to_send, size_t to_send_len,
@@ -342,6 +252,90 @@ out:
 	return rc;
 
 }
+
+
+int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
+{
+	int rc;
+	struct atsha204_buffer recv = {0, 0};
+	int rnd_len;
+
+	const u8 rand_cmd[] = {0x03, 0x07, 0x1b, 0x01, 0x00, 0x00, 0x27, 0x47};
+
+	rc = atsha204_i2c_transaction(global_chip, rand_cmd, sizeof(rand_cmd),
+				      &recv);
+	if (sizeof(rand_cmd) == rc) {
+
+		if (!atsha204_check_rsp_crc16(recv.ptr, recv.len)) {
+			rc = -EBADMSG;
+			dev_err(global_chip->dev, "%s\n", "Bad CRC on Random");
+		} else {
+			rnd_len = (max > recv.len - 3) ? recv.len - 3 : max;
+			memcpy(to_fill, &recv.ptr[1], rnd_len);
+			rc = rnd_len;
+			dev_info(global_chip->dev, "%s: %d\n",
+				 "Returning random bytes", rc);
+		}
+
+	}
+
+	return rc;
+
+
+}
+
+static int atsha204_i2c_rng_read(struct hwrng *rng, void *data,
+				 size_t max, bool wait)
+{
+	return atsha204_i2c_get_random(data, max);
+}
+
+static struct hwrng atsha204_i2c_rng = {
+	.name = ATSHA204_RNG_NAME,
+	.read = atsha204_i2c_rng_read,
+};
+
+
+int atsha204_i2c_validate_rsp(const struct atsha204_buffer *packet,
+			      struct atsha204_buffer *rsp)
+{
+	int rc;
+
+	if (packet->len < 4)
+		goto out_bad_msg;
+	else if (atsha204_check_rsp_crc16(packet->ptr, packet->len)) {
+		rsp->ptr = packet->ptr + 1;
+		rsp->len = packet->len - 3;
+		rc = 0;
+		goto out;
+	} else {
+		/* CRC failed */
+	}
+
+out_bad_msg:
+	rc = -EBADMSG;
+out:
+	return rc;
+}
+
+
+int atsha204_i2c_sleep(const struct i2c_client *client)
+{
+	const struct device *dev = &client->dev;
+	int retval;
+	char to_send[1] = {ATSHA204_SLEEP};
+
+	dev_dbg(dev, "Send sleep\n");
+	retval = i2c_master_send(client, to_send, 1);
+	if (retval == 1)
+		retval = 0;
+	else
+		dev_err(dev, "Failed to sleep\n");
+
+	return retval;
+
+}
+
 
 void atsha204_i2c_crc_command(u8 *cmd, int len)
 {
@@ -498,73 +492,24 @@ int atsha204_i2c_release(struct inode *inode, struct file *filep)
 	return 0;
 }
 
-struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
-						     struct i2c_client *client)
+static const struct attribute_group atsha204_dev_group;
+
+int atsha204_sysfs_add_device(struct atsha204_chip *chip)
 {
-	struct atsha204_chip *chip;
-	int rc;
+	int err;
 
-	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
-	if (chip == NULL)
-		goto out_null;
+	err = sysfs_create_group(&chip->dev->kobj,
+				 &atsha204_dev_group);
 
-	chip->dev_num = 0;
-	scnprintf(chip->devname, sizeof(chip->devname), "%s%d",
-		  "atsha", chip->dev_num);
-
-	chip->dev = get_device(dev);
-	dev_set_drvdata(dev, chip);
-
-	chip->client = client;
-
-	mutex_init(&chip->transaction_mutex);
-
-	if (atsha204_i2c_add_device(chip)) {
-		dev_err(dev, "%s\n", "Failed to add device");
-		goto put_device;
-	}
-
-	global_chip = chip;
-
-	rc = hwrng_register(&atsha204_i2c_rng);
-	dev_dbg(dev, "%s%d\n", "HWRNG result: ", rc);
-
-	return chip;
-
-put_device:
-	put_device(chip->dev);
-
-	kfree(chip);
-out_null:
-	return NULL;
+	if (err)
+		dev_err(chip->dev,
+			"failed to create sysfs attributes, %d\n", err);
+	return err;
 }
 
-
-int atsha204_i2c_probe(struct i2c_client *client,
-		       const struct i2c_device_id *id)
+void atsha204_sysfs_del_device(struct atsha204_chip *chip)
 {
-	int result = -1;
-	struct device *dev = &client->dev;
-	struct atsha204_chip *chip;
-
-	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
-		return -ENODEV;
-
-	result = atsha204_i2c_wakeup(client);
-	if (result == 0) {
-		atsha204_i2c_idle(client);
-
-		chip = atsha204_i2c_register_hardware(dev, client);
-		if (chip == NULL)
-			return -ENODEV;
-
-		global_chip = chip;
-		result = atsha204_sysfs_add_device(chip);
-	} else{
-		dev_err(dev, "Device failed to wake\n");
-	}
-
-	return result;
+	sysfs_remove_group(&chip->dev->kobj, &atsha204_dev_group);
 }
 
 int atsha204_i2c_remove(struct i2c_client *client)
@@ -595,21 +540,9 @@ int atsha204_i2c_remove(struct i2c_client *client)
 
 }
 
-
-
-
-
 MODULE_DEVICE_TABLE(i2c, atsha204_i2c_id);
 
-static struct i2c_driver atsha204_i2c_driver = {
-	.driver = {
-		.name = "atsha204-i2c",
-		.owner = THIS_MODULE,
-	},
-	.probe = atsha204_i2c_probe,
-	.remove = atsha204_i2c_remove,
-	.id_table = atsha204_i2c_id,
-};
+static struct i2c_driver atsha204_i2c_driver;
 
 static int __init atsha204_i2c_init(void)
 {
@@ -657,6 +590,75 @@ int atsha204_i2c_add_device(struct atsha204_chip *chip)
 
 	return retval;
 }
+
+struct atsha204_chip *atsha204_i2c_register_hardware(struct device *dev,
+						     struct i2c_client *client)
+{
+	struct atsha204_chip *chip;
+	int rc;
+
+	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
+	if (chip == NULL)
+		goto out_null;
+
+	chip->dev_num = 0;
+	scnprintf(chip->devname, sizeof(chip->devname), "%s%d",
+		  "atsha", chip->dev_num);
+
+	chip->dev = get_device(dev);
+	dev_set_drvdata(dev, chip);
+
+	chip->client = client;
+
+	mutex_init(&chip->transaction_mutex);
+
+	if (atsha204_i2c_add_device(chip)) {
+		dev_err(dev, "%s\n", "Failed to add device");
+		goto put_device;
+	}
+
+	global_chip = chip;
+
+	rc = hwrng_register(&atsha204_i2c_rng);
+	dev_dbg(dev, "%s%d\n", "HWRNG result: ", rc);
+
+	return chip;
+
+put_device:
+	put_device(chip->dev);
+
+	kfree(chip);
+out_null:
+	return NULL;
+}
+
+int atsha204_i2c_probe(struct i2c_client *client,
+		       const struct i2c_device_id *id)
+{
+	int result = -1;
+	struct device *dev = &client->dev;
+	struct atsha204_chip *chip;
+
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C))
+		return -ENODEV;
+
+	result = atsha204_i2c_wakeup(client);
+	if (result == 0) {
+		atsha204_i2c_idle(client);
+
+		chip = atsha204_i2c_register_hardware(dev, client);
+		if (chip == NULL)
+			return -ENODEV;
+
+		global_chip = chip;
+		result = atsha204_sysfs_add_device(chip);
+	} else{
+		dev_err(dev, "Device failed to wake\n");
+	}
+
+	return result;
+}
+
 
 int atsha204_i2c_read4(struct atsha204_chip *chip, u8 *read_buf,
 		       const u16 addr, const u8 param1)
@@ -826,23 +828,16 @@ static const struct attribute_group atsha204_dev_group = {
 	.attrs = atsha204_dev_attrs,
 };
 
-int atsha204_sysfs_add_device(struct atsha204_chip *chip)
-{
-	int err;
+static struct i2c_driver atsha204_i2c_driver = {
+	.driver = {
+		.name = "atsha204-i2c",
+		.owner = THIS_MODULE,
+	},
+	.probe = atsha204_i2c_probe,
+	.remove = atsha204_i2c_remove,
+	.id_table = atsha204_i2c_id,
+};
 
-	err = sysfs_create_group(&chip->dev->kobj,
-				 &atsha204_dev_group);
-
-	if (err)
-		dev_err(chip->dev,
-			"failed to create sysfs attributes, %d\n", err);
-	return err;
-}
-
-void atsha204_sysfs_del_device(struct atsha204_chip *chip)
-{
-	sysfs_remove_group(&chip->dev->kobj, &atsha204_dev_group);
-}
 
 MODULE_AUTHOR("Josh Datko <jbd@cryptotronix.com");
 MODULE_DESCRIPTION("Atmel ATSHA204 driver");
