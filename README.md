@@ -1,4 +1,3 @@
-
 atsha204-i2c
 =======
 
@@ -8,7 +7,10 @@ atsha204-i2c
 </a>[![Stories in Ready](https://badge.waffle.io/cryptotronix/atsha204-i2c.png?label=ready&title=Ready)](https://waffle.io/cryptotronix/atsha204-i2c)
 
 
-Kernel module for Atmel's ATSHA204 I2C device.
+Kernel module for Atmel's ATSHA204 I2C device. It will also work with
+the ATECC108, ATECC108A, ATECC508 and ATSHA204A. This driver
+implements a communication layer which is fully documented in the
+ATSHA204(A) datasheet.
 
 This software is in ***ALPHA***. It is subject to drastic refactoring
 at will by the author.
