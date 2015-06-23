@@ -21,6 +21,9 @@
 #define ATSHA204_SLEEP 0x01
 #define ATSHA204_RNG_NAME "atsha-rng"
 
+#define ATECC108_W_HI (500)    // 500us for ATECC108A
+#define ATSHA204_W_HI (2500)   // 2.5ms for ATSHA204
+
 struct atsha204_chip {
     struct device *dev;
 
