@@ -19,7 +19,7 @@ MDIR ?= /lib/modules/`uname -r`/kernel/drivers/char/
 SRC := atsha204-i2c.c
 MODULE := atsha204-i2c.ko
 
-.PHONY: all module clean install check modules_install
+.PHONY: all module clean install check modules_install checkpatch
 
 all: module test/test
 
@@ -48,5 +48,8 @@ modules_install:
 
 TAGS:
 	etags $(SRC)
+
+checkpatch:
+	scripts/checkpatch.pl --terse --file --no-tree atsha204-i2c.c
 
 endif
