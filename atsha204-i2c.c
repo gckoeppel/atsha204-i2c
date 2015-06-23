@@ -22,7 +22,84 @@
 #include <linux/delay.h>
 #include <linux/atomic.h>
 #include <linux/printk.h>
-#include "atsha204-i2c.h"
+#include <linux/miscdevice.h>
+#include <linux/i2c.h>
+#include <linux/device.h>
+#include <linux/hw_random.h>
+#include <linux/mutex.h>
+
+#define ATSHA204_I2C_VERSION "0.1"
+#define ATSHA204_SLEEP 0x01
+#define ATSHA204_RNG_NAME "atsha-rng"
+
+/* 500us for ATECC108A */
+#define ATECC108_W_HI (500)
+/* 2.5ms for ATSHA204 */
+#define ATSHA204_W_HI (2500)
+
+struct atsha204_chip {
+	struct device *dev;
+
+	int dev_num;
+	char devname[7];
+	unsigned long is_open;
+
+	struct i2c_client *client;
+	struct miscdevice miscdev;
+	struct mutex transaction_mutex;
+};
+
+struct atsha204_cmd_metadata {
+	int expected_rec_len;
+	int actual_rec_len;
+	unsigned long usleep;
+};
+
+struct atsha204_buffer {
+	u8 *ptr;
+	int len;
+};
+
+struct atsha204_file_priv {
+	struct atsha204_chip *chip;
+	struct atsha204_cmd_metadata meta;
+
+	struct atsha204_buffer buf;
+};
+
+static const struct i2c_device_id atsha204_i2c_id[] = {
+	{"atsha204-i2c", 0},
+	{ }
+};
+
+/* Declare functions */
+int atsha204_i2c_get_random(u8 *to_fill, const size_t max);
+int atsha204_i2c_transaction(struct atsha204_chip *chip,
+			     const u8* to_send, size_t to_send_len,
+			     struct atsha204_buffer *buf);
+bool atsha204_check_rsp_crc16(const u8 *buf, const u8 len);
+int atsha204_i2c_add_device(struct atsha204_chip *chip);
+int atsha204_sysfs_add_device(struct atsha204_chip *chip);
+void atsha204_sysfs_del_device(struct atsha204_chip *chip);
+
+void atsha204_set_params(struct atsha204_cmd_metadata *cmd,
+			 int expected_rec_len,
+			 unsigned long usleep)
+{
+	cmd->expected_rec_len = expected_rec_len;
+	cmd->usleep = usleep;
+}
+
+static int atsha204_i2c_rng_read(struct hwrng *rng, void *data,
+				 size_t max, bool wait)
+{
+	return atsha204_i2c_get_random(data, max);
+}
+
+static struct hwrng atsha204_i2c_rng = {
+	.name = ATSHA204_RNG_NAME,
+	.read = atsha204_i2c_rng_read,
+};
 
 struct atsha204_chip *global_chip = NULL;
 static atomic_t atsha204_avail = ATOMIC_INIT(1);
@@ -57,65 +134,7 @@ int atsha204_i2c_get_random(u8 *to_fill, const size_t max)
 
 }
 
-int atsha204_i2c_transaction(struct atsha204_chip *chip,
-			     const u8 *to_send, size_t to_send_len,
-			     struct atsha204_buffer *buf)
 
-
-{
-	int rc;
-	u8 status_packet[4];
-	u8 *recv_buf;
-	int total_sleep = 60;
-	int packet_len;
-
-	mutex_lock(&chip->transaction_mutex);
-
-	dev_dbg(chip->dev, "%s\n", "About to send to device.");
-
-	/* Begin i2c transactions */
-	rc = atsha204_i2c_wakeup(chip->client);
-	if (rc)
-		goto out;
-
-	print_hex_dump_bytes("Sending : ", DUMP_PREFIX_OFFSET,
-			     to_send, to_send_len);
-
-	rc = i2c_master_send(chip->client, to_send, to_send_len);
-	if (rc != to_send_len)
-		goto out;
-
-	/* Poll for the response */
-	while (4 != i2c_master_recv(chip->client, status_packet, 4)
-	       && total_sleep > 0){
-		total_sleep = total_sleep - 4;
-		msleep(4);
-	}
-
-	packet_len = status_packet[0];
-	/* The device is awake and we don't want to hit the watchdog
-	   timer, so don't allow sleeps here*/
-	recv_buf = kmalloc(packet_len, GFP_ATOMIC);
-	memcpy(recv_buf, status_packet, sizeof(status_packet));
-	rc = i2c_master_recv(chip->client, recv_buf + 4, packet_len - 4);
-
-	/* Store the entire packet. Other functions must check the CRC
-	   and strip of the length byte */
-	buf->ptr = recv_buf;
-	buf->len = packet_len;
-
-	dev_dbg(chip->dev, "%s\n", "Received from device.");
-	print_hex_dump_bytes("Received: ", DUMP_PREFIX_OFFSET,
-			     recv_buf, packet_len);
-
-	atsha204_i2c_idle(chip->client);
-
-	rc = to_send_len;
-out:
-	mutex_unlock(&chip->transaction_mutex);
-	return rc;
-
-}
 
 
 u16 atsha204_crc16(const u8 *buf, const u8 len)
@@ -261,6 +280,66 @@ int atsha204_i2c_sleep(const struct i2c_client *client)
 		dev_err(dev, "Failed to sleep\n");
 
 	return retval;
+
+}
+
+int atsha204_i2c_transaction(struct atsha204_chip *chip,
+			     const u8 *to_send, size_t to_send_len,
+			     struct atsha204_buffer *buf)
+
+
+{
+	int rc;
+	u8 status_packet[4];
+	u8 *recv_buf;
+	int total_sleep = 60;
+	int packet_len;
+
+	mutex_lock(&chip->transaction_mutex);
+
+	dev_dbg(chip->dev, "%s\n", "About to send to device.");
+
+	/* Begin i2c transactions */
+	rc = atsha204_i2c_wakeup(chip->client);
+	if (rc)
+		goto out;
+
+	print_hex_dump_bytes("Sending : ", DUMP_PREFIX_OFFSET,
+			     to_send, to_send_len);
+
+	rc = i2c_master_send(chip->client, to_send, to_send_len);
+	if (rc != to_send_len)
+		goto out;
+
+	/* Poll for the response */
+	while (4 != i2c_master_recv(chip->client, status_packet, 4)
+	       && total_sleep > 0){
+		total_sleep = total_sleep - 4;
+		msleep(4);
+	}
+
+	packet_len = status_packet[0];
+	/* The device is awake and we don't want to hit the watchdog
+	   timer, so don't allow sleeps here*/
+	recv_buf = kmalloc(packet_len, GFP_ATOMIC);
+	memcpy(recv_buf, status_packet, sizeof(status_packet));
+	rc = i2c_master_recv(chip->client, recv_buf + 4, packet_len - 4);
+
+	/* Store the entire packet. Other functions must check the CRC
+	   and strip of the length byte */
+	buf->ptr = recv_buf;
+	buf->len = packet_len;
+
+	dev_dbg(chip->dev, "%s\n", "Received from device.");
+	print_hex_dump_bytes("Received: ", DUMP_PREFIX_OFFSET,
+			     recv_buf, packet_len);
+
+	atsha204_i2c_idle(chip->client);
+
+	rc = to_send_len;
+out:
+	mutex_unlock(&chip->transaction_mutex);
+	return rc;
 
 }
 
