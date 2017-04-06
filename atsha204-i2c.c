@@ -735,6 +735,40 @@ static ssize_t configzone_show(struct device *dev,
 /*static DEVICE_ATTR_RO(configzone);*/
 struct device_attribute dev_attr_configzone = __ATTR_RO(configzone);
 
+static ssize_t otp_show(struct device *dev,
+			struct device_attribute *attr,
+			char *buf)
+{
+	
+	struct atsha204_chip *chip = dev_get_drvdata(dev);
+	int i;
+	u16 bytes, word_addr;
+	bool keep_going = true;
+	u8 param1 = 1; /* indicates otp region */
+	char *str = buf;
+
+	u8 otp[64] = {0};
+
+	for (bytes = 0; bytes < sizeof(otp) && keep_going; bytes += 4) {
+		word_addr = bytes / 4;
+		if(4 != atsha204_i2c_read4(chip,
+					   &otp[bytes],
+					   word_addr, param1)){
+			keep_going = false;
+		}
+	}
+
+	for (i = 0; i < bytes; i++) {
+		str += sprintf(str, "%02X ", otp[i]);
+		if((i + 1) % 4 == 0)
+			str += sprintf(str, "\n");
+	}
+
+	return str - buf;
+}
+/*static DEVICE_ATTR_RO(otp);*/
+struct device_attribute dev_attr_otp = __ATTR_RO(otp);
+
 static ssize_t serialnum_show(struct device *dev,
 			      struct device_attribute *attr,
 			      char *buf)
@@ -821,6 +855,7 @@ static struct attribute *atsha204_dev_attrs[] = {
 	&dev_attr_serialnum.attr,
 	&dev_attr_configlocked.attr,
 	&dev_attr_datalocked.attr,
+	&dev_attr_otp.attr,
 	NULL,
 };
 
